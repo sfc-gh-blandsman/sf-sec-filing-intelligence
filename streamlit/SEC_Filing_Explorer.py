@@ -1301,14 +1301,245 @@ def render_data_quality():
 
 
 # =============================================================================
+# Tab 7: Research Explorer
+# =============================================================================
+
+SECTION_OPTIONS = [
+    "Risk Factors", "MD&A", "Business", "Financial Statements",
+    "Legal Proceedings", "Market Risk", "Controls and Procedures",
+    "Results of Operations", "Other Events", "Director/Officer Changes"
+]
+
+
+def render_research_explorer():
+    st.header("Research Explorer")
+    st.caption("Filter-first, excerpt-retrieval workflow for technical business users. Prioritizes pre-filtering and raw document access over LLM synthesis.")
+
+    # -------------------------------------------------------------------------
+    # Inputs
+    # -------------------------------------------------------------------------
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        tickers_input = st.text_area(
+            "Company Tickers (comma-separated, e.g. AAPL, MSFT, TSLA)",
+            height=68, key="re_tickers",
+            help="Leave empty to skip company filter. Used with 'Run for Entire Sector' button below."
+        )
+        search_query = st.text_input(
+            "Search Query (optional semantic refinement)",
+            placeholder="e.g. supply chain disruption, AI-related risks",
+            key="re_query"
+        )
+
+    with col_right:
+        form_types = st.multiselect("Filing Type", ["10-K", "10-Q", "8-K"], default=["10-K"], key="re_form")
+        sections = st.multiselect("Section Filter", SECTION_OPTIONS, default=["Risk Factors"], key="re_sections")
+        from datetime import date, timedelta
+        date_start = st.date_input("Start Date", value=date.today() - timedelta(days=730), key="re_start")
+        date_end = st.date_input("End Date", value=date.today(), key="re_end")
+
+    output_mode = st.radio("Output Mode", ["Excerpts", "Summarized", "Compared"], horizontal=True, key="re_mode",
+                           help="Excerpts: raw text, no LLM. Summarized: per-company LLM summary. Compared: cross-company theme grid.")
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # Execute search
+    # -------------------------------------------------------------------------
+    if st.button("Search", type="primary", key="re_search"):
+        # Parse tickers
+        tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()] if tickers_input.strip() else []
+
+        if not tickers:
+            st.warning("Enter at least one ticker to search, or use 'Run for Entire Sector' below.")
+            return
+
+        all_results = []
+        progress = st.progress(0)
+
+        for i, ticker in enumerate(tickers):
+            progress.progress((i + 1) / len(tickers))
+
+            for section in sections:
+                for form_type in form_types:
+                    # Build filter
+                    filter_parts = [
+                        {"@eq": {"TICKER": ticker}},
+                        {"@eq": {"FORM_TYPE": form_type}},
+                        {"@eq": {"SECTION_NAME": section}}
+                    ]
+                    filters = {"@and": filter_parts}
+
+                    query = search_query if search_query else f"{section} {ticker}"
+                    try:
+                        results = search_filings(query, filters=filters, limit=5)
+                        for r in results:
+                            filed = r.get("FILED_AT", "")
+                            # Date range filter (filed_at is text 'YYYY-MM-DD')
+                            if filed and filed >= str(date_start) and filed <= str(date_end):
+                                all_results.append({
+                                    "Ticker": ticker,
+                                    "Company": r.get("COMPANY_NAME", ""),
+                                    "Form Type": r.get("FORM_TYPE", ""),
+                                    "Filed Date": filed,
+                                    "Section": r.get("SECTION_NAME", ""),
+                                    "Excerpt": r.get("CHUNK_TEXT", "")
+                                })
+                    except Exception:
+                        pass
+
+        progress.empty()
+
+        if not all_results:
+            st.warning("No results found for the given filters.")
+            return
+
+        st.success(f"Retrieved {len(all_results)} excerpts across {len(tickers)} ticker(s).")
+
+        # Store in session state for display
+        st.session_state["re_results"] = all_results
+        st.session_state["re_output_mode"] = output_mode
+
+    # -------------------------------------------------------------------------
+    # Display results
+    # -------------------------------------------------------------------------
+    results = st.session_state.get("re_results", [])
+    mode = st.session_state.get("re_output_mode", "Excerpts")
+
+    if results:
+        if mode == "Excerpts":
+            # Group by company
+            df_results = pd.DataFrame(results)
+
+            # Show Evolution toggle
+            years_span = len(df_results["Filed Date"].str[:4].unique()) if not df_results.empty else 0
+            tickers_count = df_results["Ticker"].nunique()
+            if years_span >= 2 and tickers_count > 1:
+                show_evolution = st.toggle("Show Evolution (group by company + year)", key="re_evolution")
+                if show_evolution:
+                    df_results["Year"] = df_results["Filed Date"].str[:4]
+                    df_results = df_results.sort_values(["Ticker", "Year", "Filed Date"], ascending=[True, False, False])
+
+            st.dataframe(
+                df_results[["Ticker", "Company", "Form Type", "Filed Date", "Section", "Excerpt"]],
+                use_container_width=True, hide_index=True, height=400
+            )
+
+            # CSV download
+            csv = df_results.to_csv(index=False)
+            st.download_button("Download as CSV", csv, "research_explorer_results.csv", "text/csv")
+
+            # Expandable full text
+            with st.expander("Full Excerpt Text (expandable)"):
+                for i, r in enumerate(results[:50]):
+                    st.markdown(f"**{r['Ticker']}** | {r['Form Type']} | {r['Filed Date']} | {r['Section']}")
+                    st.text(r["Excerpt"][:2000])
+                    st.divider()
+
+        elif mode == "Summarized":
+            st.subheader("Per-Company Summaries")
+            # Group by ticker
+            by_ticker = {}
+            for r in results:
+                key = r["Ticker"]
+                if key not in by_ticker:
+                    by_ticker[key] = {"company": r["Company"], "excerpts": []}
+                by_ticker[key]["excerpts"].append(r["Excerpt"][:2000])
+
+            for ticker, data in by_ticker.items():
+                context = "\n\n".join(data["excerpts"][:5])
+                prompt = f"Summarize the key points from these SEC filing excerpts for {data['company']} ({ticker}). Be concise (3-5 bullet points):\n\n{context}"
+                with st.spinner(f"Summarizing {ticker}..."):
+                    summary = cortex_complete("llama3.3-70b", prompt)
+                st.markdown(f"### {data['company']} ({ticker})")
+                st.markdown(summary)
+                with st.expander(f"Source excerpts ({len(data['excerpts'])})"):
+                    for e in data["excerpts"][:3]:
+                        st.caption(e[:500])
+                st.divider()
+
+        elif mode == "Compared":
+            st.subheader("Cross-Company Comparison")
+            # Build comparison
+            by_ticker = {}
+            for r in results:
+                key = r["Ticker"]
+                if key not in by_ticker:
+                    by_ticker[key] = {"company": r["Company"], "excerpts": []}
+                by_ticker[key]["excerpts"].append(r["Excerpt"][:1500])
+
+            comparison_parts = []
+            for ticker, data in list(by_ticker.items())[:10]:
+                excerpt = data["excerpts"][0] if data["excerpts"] else ""
+                comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
+
+            context = "\n\n---\n\n".join(comparison_parts)
+            sections_str = ", ".join(sections)
+            prompt = f"Compare the {sections_str} sections across these companies. Identify 3-5 common themes and note how each company addresses them. Present as a markdown table with themes as rows and companies as columns:\n\n{context}"
+
+            with st.spinner("Generating comparison..."):
+                comparison = cortex_complete("llama3.3-70b", prompt)
+            st.markdown(comparison)
+
+    # -------------------------------------------------------------------------
+    # Run for Entire Sector
+    # -------------------------------------------------------------------------
+    st.divider()
+    st.subheader("Run for Entire Sector")
+    st.caption("Apply current filters to ALL companies in a sector. Results stored for later review.")
+
+    sector_options = ["Technology", "Life Sciences", "Finance", "Real Estate & Construction",
+                      "Energy & Transportation", "Manufacturing", "Trade & Services", "Crypto Assets", "Other"]
+    selected_sector = st.selectbox("Target Sector", sector_options, key="re_sector")
+
+    sector_mode_map = {"Excerpts": "excerpts", "Summarized": "summarized", "Compared": "compared"}
+    sector_output = sector_mode_map.get(output_mode, "excerpts")
+    section_str = sections[0] if sections else "Risk Factors"
+    form_str = form_types[0] if form_types else "10-K"
+
+    if st.button("Run for Entire Sector", key="re_sector_btn"):
+        with st.spinner(f"Running analysis for {selected_sector} sector..."):
+            try:
+                query_param = f"'{search_query}'" if search_query else "NULL"
+                result = session.sql(f"""
+                    CALL EXPLORER_CUSTOM_ANALYSIS(
+                        '{selected_sector}', {query_param}, '{section_str}', '{form_str}', '{sector_output}'
+                    )
+                """).collect()
+                if result:
+                    st.success(result[0][0])
+                st.cache_data.clear()
+            except Exception as e:
+                st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/04_custom_analysis.sql` first.")
+
+    # View previous runs
+    with st.expander("View Previous Runs"):
+        try:
+            prev = session.sql("""
+                SELECT RUN_ID, SECTOR, QUERY_TYPE, LEFT(QUERY_TEXT, 100) AS QUERY_PREVIEW,
+                       LEFT(AGENT_RESPONSE, 200) AS RESPONSE_PREVIEW, RUN_TIMESTAMP
+                FROM EXPLORER_RESULTS
+                ORDER BY RUN_TIMESTAMP DESC
+                LIMIT 20
+            """).to_pandas()
+            if not prev.empty:
+                st.dataframe(prev, use_container_width=True, hide_index=True)
+            else:
+                st.info("No previous runs yet.")
+        except Exception:
+            st.info("EXPLORER_RESULTS table not found. Deploy `sql/07_explorer/01_batch_sp.sql` first.")
+
+
+# =============================================================================
 # Main App
 # =============================================================================
 
 def main():
     st.title("SEC Filing Intelligence")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Pipeline", "🔬 Data Quality", "🔍 Filing Explorer (RAG)", "💰 Cost Monitor", "⚙️ Pipeline Control", "📈 Agent Eval"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📊 Pipeline", "🔬 Data Quality", "🔍 Filing Explorer (RAG)", "💰 Cost Monitor", "⚙️ Pipeline Control", "📈 Agent Eval", "🔎 Research Explorer"
     ])
 
     with tab1:
@@ -1323,6 +1554,8 @@ def main():
         render_pipeline_control()
     with tab6:
         render_eval_results()
+    with tab7:
+        render_research_explorer()
 
     # Sidebar only shows Filing Explorer controls (rendered after tabs so it's always present)
     # but labeled clearly as belonging to the Explorer tab
