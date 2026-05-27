@@ -1549,8 +1549,12 @@ def render_research_explorer():
                         st.divider()
             else:
                 st.info("No previous runs yet.")
-        except Exception:
-            st.info("EXPLORER_RESULTS table not found. Deploy `sql/07_explorer/01_batch_sp.sql` first.")
+        except Exception as e:
+            err = str(e)
+            if "does not exist" in err:
+                st.info("EXPLORER_RESULTS table not found. Deploy `sql/07_explorer/01_batch_sp.sql` first.")
+            else:
+                st.error(f"Error loading previous runs: {err[:200]}")
 
 
 # =============================================================================
