@@ -1516,15 +1516,36 @@ def render_research_explorer():
     # View previous runs
     with st.expander("View Previous Runs"):
         try:
-            prev = session.sql("""
-                SELECT RUN_ID, SECTOR, QUERY_TYPE, LEFT(QUERY_TEXT, 100) AS QUERY_PREVIEW,
-                       LEFT(AGENT_RESPONSE, 200) AS RESPONSE_PREVIEW, RUN_TIMESTAMP
+            runs = session.sql("""
+                SELECT DISTINCT RUN_ID, SECTOR, QUERY_TYPE, RUN_TIMESTAMP
                 FROM EXPLORER_RESULTS
                 ORDER BY RUN_TIMESTAMP DESC
                 LIMIT 20
             """).to_pandas()
-            if not prev.empty:
-                st.dataframe(prev, use_container_width=True, hide_index=True)
+            if not runs.empty:
+                selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
+                if selected_run:
+                    run_rows = session.sql(f"""
+                        SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE
+                        FROM EXPLORER_RESULTS
+                        WHERE RUN_ID = '{selected_run}'
+                        ORDER BY RUN_TIMESTAMP
+                    """).collect()
+                    for row in run_rows:
+                        qtype = row["QUERY_TYPE"]
+                        if qtype == "custom_comparison":
+                            st.markdown("**Cross-Company Comparison:**")
+                            st.markdown(row["AGENT_RESPONSE"])
+                        elif qtype == "custom_summary":
+                            st.markdown(f"**{row['QUERY_TEXT']}:**")
+                            st.markdown(row["AGENT_RESPONSE"])
+                        elif qtype == "custom_excerpt":
+                            st.caption(f"{row['QUERY_TEXT']}")
+                            st.text(row["AGENT_RESPONSE"][:1000] if row["AGENT_RESPONSE"] else "")
+                        else:
+                            st.markdown(f"**{row['QUERY_TYPE']}:** {row['QUERY_TEXT']}")
+                            st.markdown(row["AGENT_RESPONSE"] or "")
+                        st.divider()
             else:
                 st.info("No previous runs yet.")
         except Exception:
