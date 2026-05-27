@@ -1517,9 +1517,10 @@ def render_research_explorer():
     with st.expander("View Previous Runs"):
         try:
             runs = session.sql("""
-                SELECT DISTINCT RUN_ID, SECTOR, QUERY_TYPE, RUN_TIMESTAMP
+                SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE, MAX(RUN_TIMESTAMP) AS RUN_TIMESTAMP
                 FROM EXPLORER_RESULTS
-                ORDER BY RUN_TIMESTAMP DESC
+                GROUP BY RUN_ID
+                ORDER BY MAX(RUN_TIMESTAMP) DESC
                 LIMIT 20
             """).to_pandas()
             if not runs.empty:
