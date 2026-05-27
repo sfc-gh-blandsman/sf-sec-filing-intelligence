@@ -56,7 +56,7 @@ After Phase 1 completes, **re-run `sql/00_config.sql`** to persist config values
 
 ## Phase 1b: Dashboard (Optional — recommended, 1 minute)
 
-Deploy the Streamlit monitoring dashboard early so you can track pipeline progress from the start. The dashboard has 5 tabs: Pipeline status, Agent Eval Results, Filing Explorer (RAG), Cost Monitor, and Pipeline Control.
+Deploy the Streamlit monitoring dashboard early so you can track pipeline progress from the start. The dashboard has 6 tabs: Pipeline, Data Quality, Filing Explorer (RAG), Cost Monitor, Pipeline Control, and Agent Eval.
 
 ### Worksheet 1b: Streamlit Dashboard
 
@@ -100,28 +100,25 @@ Open the app from Snowsight: Projects → Streamlit → SEC_FILING_DASHBOARD
 
 ## Phase 2: Ingestion (~5 minutes for Quick Start)
 
-### Worksheet 2: Stored Procedures + Quick Start Ingestion
+### Worksheet 2: Feed Archive Ingestion
 
 Paste and run in order:
 
 1. `sql/00_config.sql` — (always first)
-2. `sql/02_ingestion/01_load_metadata.sql` — Creates LOAD_EDGAR_METADATA SP
-3. `sql/02_ingestion/04_feed_archive_loader.sql` — Creates LOAD_FEED_ARCHIVE + LOAD_FEED_DATE_RANGE SPs
+2. `sql/02_ingestion/04_feed_archive_loader.sql` — Creates LOAD_FEED_ARCHIVE + LOAD_FEED_DATE_RANGE SPs
 
 Then execute the Quick Start ingestion (uncomment and run):
 
 ```sql
--- Load Q1 2025 metadata index (~23,000 filings)
-CALL LOAD_EDGAR_METADATA(2025, 1, $config_user_agent);
-
--- Load one day of actual filing content (376 filings, ~2 minutes)
+-- Load one day of filing content (376 filings, ~2 minutes)
+-- This downloads metadata + content in a single pass from the feed archive
 CALL LOAD_FEED_ARCHIVE('2025-02-21', $config_user_agent);
 ```
 
 **Verify:**
 ```sql
-SELECT COUNT(*) AS index_rows FROM FILING_INDEX;     -- Should be ~23,000+
-SELECT COUNT(*) AS content_rows FROM FILING_CONTENT; -- Should be 376
+SELECT COUNT(*) AS index_rows FROM FILING_INDEX;     -- Should be ~376
+SELECT COUNT(*) AS content_rows FROM FILING_CONTENT; -- Should be ~376
 ```
 
 ---
@@ -170,7 +167,7 @@ Wait for chunking to complete, then:
 
 5. `sql/03_processing/04_signal_extraction.sql` — Runs AI signal extraction (3 sessions sequentially)
 
-**Note:** Signal extraction uses AI_EXTRACT and takes ~2-3 minutes for 376 filings. For large corpora, use the Processing Task DAG instead (see Phase 6).
+**Note:** Signal extraction uses AI_EXTRACT and takes ~2-3 minutes for 376 filings. These manual scripts are for Quick Start only. For production or larger corpora, use the Processing Task DAG (Phase 6b) which handles chunking, signals, metrics, guidance, normalization, and search refresh automatically.
 
 After signals are extracted, propagate industry data to downstream tables:
 
@@ -259,13 +256,12 @@ The Streamlit Pipeline Control tab triggers pipeline runs via Snowflake Task DAG
 
 ### Worksheet 6b: Task DAGs
 
-Paste and run each script in a **separate worksheet** (each contains BEGIN...END blocks with semicolons that require Snowsight's statement splitter):
+Paste and run each script in a **separate worksheet** (each contains BEGIN...END blocks with semicolons that require Snowsight's statement splitter). Each worksheet must have `sql/00_config.sql` pasted and run at the top:
 
-1. `sql/00_config.sql`
-2. `sql/02_ingestion/05_feed_ingestion_dag.sql` — Feed ingestion (12 parallel monthly tasks, multi-year loop)
-3. `sql/04_enrichment/03_enrichment_task_dag.sql` — Ticker enrichment + industry backfill
-4. `sql/03_processing/05_processing_task_dag.sql` — Chunking, signals, metrics, search refresh
-5. `sql/05_serving/04_serving_task_dag.sql` — Semantic view + agent redeployment (manual trigger only)
+1. **Worksheet A:** `sql/00_config.sql` + `sql/02_ingestion/05_feed_ingestion_dag.sql` — Feed ingestion (12 parallel monthly tasks, multi-year loop)
+2. **Worksheet B:** `sql/00_config.sql` + `sql/04_enrichment/03_enrichment_task_dag.sql` — Ticker enrichment + industry backfill
+3. **Worksheet C:** `sql/00_config.sql` + `sql/03_processing/05_processing_task_dag.sql` — Chunking, signals, metrics, normalization, search refresh
+4. **Worksheet D:** `sql/00_config.sql` + `sql/05_serving/04_serving_task_dag.sql` — Semantic view + agent redeployment (manual trigger only)
 
 **Important:** Each DAG script must be run in its own worksheet with `sql/00_config.sql` at the top. The scripts contain `BEGIN...END` blocks that won't work if combined with other scripts in the same run.
 
@@ -281,7 +277,7 @@ After deploying, the Pipeline Control tab in the Streamlit app can trigger and m
 
 ## Scaling to Full Year (Optional)
 
-### Option A: Feed Ingestion Task DAG (recommended — parallel, ~45 minutes)
+### Option A: Feed Ingestion Task DAG (recommended — parallel, ~2.5 hours/year)
 
 ```sql
 -- In a new worksheet:
@@ -306,17 +302,18 @@ CALL LOAD_FEED_DATE_RANGE(
 );
 ```
 
-### After full ingestion: re-run enrichment + processing
+### After full ingestion
 
+If you deployed the Task DAGs (Phase 6b), the pipeline **auto-chains**: Feed finalizer triggers Enrichment, which triggers Processing (including search refresh). No manual re-runs needed.
+
+If you did NOT deploy the DAGs, manually run:
 ```sql
--- Re-run ticker enrichment (loop until DONE)
--- Re-run sql/04_enrichment/02_metadata_backfill.sql
--- Re-run chunking pipeline or use Processing Task DAG:
---   Paste sql/03_processing/05_processing_task_dag.sql and run
---   EXECUTE TASK T_PROCESSING_ROOT;
--- Recreate Cortex Search (DROP + CREATE — column data changed)
--- Recreate Semantic View (just re-run the script)
--- Redeploy Agent (just re-run the script)
+-- Re-run enrichment
+CALL ENRICH_TICKERS(500, '0000000000', $config_user_agent);
+-- Re-run metadata backfill (paste and run sql/04_enrichment/02_metadata_backfill.sql)
+-- Re-run processing (paste and run sql/03_processing/03_chunking_pipeline.sql + 04_signal_extraction.sql)
+-- Refresh search service:
+ALTER CORTEX SEARCH SERVICE SEC_FILING_SEARCH REFRESH;
 ```
 
 ---
