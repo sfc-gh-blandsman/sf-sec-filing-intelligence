@@ -11,7 +11,7 @@ A **SEC EDGAR filing intelligence pipeline** on Snowflake. The system ingests pu
 1. **Cortex Search** — semantic retrieval over filing text chunks
 2. **Cortex Analyst** — aggregate analytics via a semantic view over filing signals
 3. **Cortex Agent** — investment research Q&A combining both tools
-4. **Streamlit Dashboard** — 6-tab monitoring and control app
+4. **Streamlit Dashboard** — 7-tab monitoring, control, and research app
 
 The pipeline is fully parameterized via `sql/00_config.sql` — zero hardcoded database names, schema names, emails, or account identifiers anywhere in the codebase.
 
@@ -41,7 +41,8 @@ All account-specific values live in `sql/00_config.sql` (gitignored). Copy from 
 | `SEC_FILING_SEARCH` | Cortex Search | Semantic search over filing chunks (Arctic M-v1.5, incremental refresh) |
 | `SEC_FILING_ANALYTICS` | Semantic View | Aggregate analytics for Cortex Analyst (live query, no materialization) |
 | `SEC_FILING_AGENT` | Cortex Agent | 2-tool agent (search + analyst), claude-opus-4-7 orchestrator |
-| `SEC_FILING_DASHBOARD` | Streamlit | 6-tab monitoring dashboard |
+| `SEC_FILING_DASHBOARD` | Streamlit | 7-tab monitoring dashboard |
+| `EXPLORER_RESULTS` | Table | Batch research explorer results |
 | `_FEED_INGEST_LOG` | Table | Feed ingestion progress tracking |
 | `_PIPELINE_CONFIG` | Table | Runtime configuration for task DAGs |
 | `EVAL_RESULTS` | Table | Materialized agent evaluation results |
@@ -91,9 +92,10 @@ sf-sec-filing-intelligence/
 │   │   ├── 01_agent_deployment.sql    ← CREATE AGENT (dynamic SQL, injects config)
 │   │   └── 02_eval_framework.sql      ← Eval dataset + 4-task DAG
 │   ├── 07_explorer/
-│   │   ├── 01_batch_sp.sql            ← EXPLORER_SECTOR_ANALYSIS SP
-│   │   ├── 02_task_schedule.sql       ← Weekly batch task
-│   │   └── 03_sample_queries.sql      ← Interactive + batch examples
+│   │   ├── 01_batch_sp.sql            ← EXPLORER_SECTOR_ANALYSIS SP + EXPLORER_RESULTS table
+│   │   ├── 02_task_schedule.sql       ← Nightly batch task
+│   │   ├── 03_sample_queries.sql      ← Interactive + batch examples
+│   │   └── 04_custom_analysis.sql     ← EXPLORER_CUSTOM_ANALYSIS SP (Research Explorer backend)
 │   └── 99_teardown/
 │       ├── 01_teardown.sql            ← Full project teardown (drops everything)
 │       └── 02_drop_legacy_utilities.sql ← Drops dev/debug objects
@@ -104,7 +106,7 @@ sf-sec-filing-intelligence/
 │       ├── eval_config.yaml           ← Metric definitions
 │       └── sample_questions.sql       ← 20 generic eval questions
 ├── streamlit/
-│   ├── SEC_Filing_Explorer.py         ← 6-tab SiS dashboard
+│   ├── SEC_Filing_Explorer.py         ← 7-tab SiS dashboard
 │   └── environment.yml               ← Dependencies (snowpark, streamlit, plotly)
 └── docs/
     ├── architecture.md                ← System design + data flow

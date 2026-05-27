@@ -69,8 +69,8 @@ An end-to-end pipeline that ingests SEC EDGAR filings (10-K, 10-Q, 8-K), process
 │  └─────────────────────┘  └────────────────────┘  └──────────────────────┘  │
 │                                                                              │
 │  ┌──────────────────────────────────────────────────────────────────────┐    │
-│  │              Streamlit Dashboard (6 tabs)                              │    │
-│  │  Pipeline | Data Quality | Explorer (RAG) | Cost | Control | Eval     │    │
+│  │              Streamlit Dashboard (7 tabs)                              │    │
+│  │  Pipeline | Data Quality | Explorer (RAG) | Research | Cost | Ctrl | Eval │
 │  └──────────────────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -144,13 +144,14 @@ Each DAG is triggered by the previous DAG's finalizer via `EXECUTE TASK`. The pi
 
 ## Streamlit Dashboard
 
-6-tab monitoring and control app deployed as Streamlit in Snowflake:
+7-tab monitoring and control app deployed as Streamlit in Snowflake:
 
 | Tab | Purpose |
 |-----|---------|
 | Pipeline | DAG diagrams (color-coded by live status), row counts, ingestion progress + ETA |
 | Data Quality | Completeness scorecard, event type distribution, extraction methodology |
 | Filing Explorer (RAG) | Chat-based semantic search with LLM-generated answers |
+| Research Explorer | Filter-first excerpt retrieval: multi-ticker, multi-section, 3 output modes (excerpts/summarized/compared), CSV export, sector batch analysis |
 | Cost Monitor | Warehouse credits, AI token usage, search service stats |
 | Pipeline Control | Trigger runs, edit config, emergency stop + recovery |
 | Agent Eval | Run evaluations, view per-question scores, detailed explanations |

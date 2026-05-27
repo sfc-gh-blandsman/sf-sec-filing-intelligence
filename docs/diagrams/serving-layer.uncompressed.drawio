@@ -34,8 +34,8 @@
         </mxCell>
 
         <!-- Streamlit -->
-        <mxCell id="streamlit" value="Streamlit Dashboard&#xa;─────────────────&#xa;Tab 1: Pipeline (DAG diagrams + progress)&#xa;Tab 2: Data Quality (scorecard + charts)&#xa;Tab 3: Filing Explorer (RAG chat)&#xa;Tab 4: Cost Monitor (credits + AI usage)&#xa;Tab 5: Pipeline Control (trigger + halt)&#xa;Tab 6: Agent Eval (scores + run button)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
-          <mxGeometry x="850" y="320" width="300" height="140" as="geometry" />
+        <mxCell id="streamlit" value="Streamlit Dashboard&#xa;─────────────────&#xa;Tab 1: Pipeline (DAG diagrams + progress)&#xa;Tab 2: Data Quality (scorecard + charts)&#xa;Tab 3: Filing Explorer (RAG chat)&#xa;Tab 4: Research Explorer (filter + excerpts)&#xa;Tab 5: Cost Monitor (credits + AI usage)&#xa;Tab 6: Pipeline Control (trigger + halt)&#xa;Tab 7: Agent Eval (scores + run button)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="850" y="320" width="300" height="155" as="geometry" />
         </mxCell>
 
         <!-- Users -->

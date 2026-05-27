@@ -56,7 +56,7 @@ After Phase 1 completes, **re-run `sql/00_config.sql`** to persist config values
 
 ## Phase 1b: Dashboard (Optional — recommended, 1 minute)
 
-Deploy the Streamlit monitoring dashboard early so you can track pipeline progress from the start. The dashboard has 6 tabs: Pipeline, Data Quality, Filing Explorer (RAG), Cost Monitor, Pipeline Control, and Agent Eval.
+Deploy the Streamlit monitoring dashboard early so you can track pipeline progress from the start. The dashboard has 7 tabs: Pipeline, Data Quality, Filing Explorer (RAG), Research Explorer, Cost Monitor, Pipeline Control, and Agent Eval.
 
 ### Worksheet 1b: Streamlit Dashboard
 

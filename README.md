@@ -23,7 +23,7 @@ Processing DAG (chunking + signals + metrics + guidance + normalization + search
         │           ▲
         ├──── Semantic View (structured analytics over signals)
         │
-        └──── Streamlit Dashboard (6-tab monitoring + control)
+        └──── Streamlit Dashboard (7-tab monitoring + control + research)
 ```
 
 See `docs/diagrams/` for detailed draw.io diagrams (importable to LucidChart).
@@ -83,13 +83,13 @@ sf-sec-filing-intelligence/
 │   ├── 04_enrichment/                 ← Ticker lookup, industry mapping, event normalization
 │   ├── 05_serving/                    ← Cortex Search, semantic view, Streamlit deploy
 │   ├── 06_agent/                      ← Agent deployment + evaluation framework
-│   ├── 07_explorer/                   ← Batch analysis SP + scheduled tasks
+│   ├── 07_explorer/                   ← Batch + custom analysis SPs (sector research)
 │   └── 99_teardown/                   ← Full project teardown (uninstall)
 ├── agent/
 │   ├── spec/                          ← Agent YAML specification (reference)
 │   └── eval/                          ← Evaluation config + sample questions
 ├── streamlit/
-│   ├── SEC_Filing_Explorer.py         ← 6-tab dashboard (Pipeline, Quality, Explorer, Cost, Control, Eval)
+│   ├── SEC_Filing_Explorer.py         ← 7-tab dashboard (Pipeline, Quality, Explorer, Research, Cost, Control, Eval)
 │   └── environment.yml               ← SiS dependencies (snowpark, streamlit, plotly)
 └── docs/
     ├── architecture.md                ← System design + data flow
@@ -100,13 +100,14 @@ sf-sec-filing-intelligence/
 
 ## Monitoring Dashboard
 
-A 6-tab Streamlit in Snowflake app provides real-time monitoring and control:
+A 7-tab Streamlit in Snowflake app provides real-time monitoring and control:
 
 | Tab | Purpose |
 |-----|---------|
 | Pipeline | DAG diagrams with live status, ingestion progress + ETA |
 | Data Quality | Completeness scorecard, event type distribution, extraction methodology |
 | Filing Explorer (RAG) | Chat interface with semantic search + LLM-generated answers |
+| Research Explorer | Filter-first excerpt retrieval: multi-ticker, multi-section, 3 modes (excerpts/summarized/compared), CSV export, batch sector analysis |
 | Cost Monitor | Warehouse credits, AI token usage, search service stats |
 | Pipeline Control | Trigger ingestion runs, edit config, emergency stop + recovery |
 | Agent Eval | Run evaluations, per-question scores, detailed explanations |
