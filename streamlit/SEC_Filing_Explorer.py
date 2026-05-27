@@ -1539,7 +1539,7 @@ def main():
     st.title("SEC Filing Intelligence")
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📊 Pipeline", "🔬 Data Quality", "🔍 Filing Explorer (RAG)", "💰 Cost Monitor", "⚙️ Pipeline Control", "📈 Agent Eval", "🔎 Research Explorer"
+        "📊 Pipeline", "🔬 Data Quality", "🔍 Filing Explorer (RAG)", "🔎 Research Explorer", "💰 Cost Monitor", "⚙️ Pipeline Control", "📈 Agent Eval"
     ])
 
     with tab1:
@@ -1549,13 +1549,13 @@ def main():
     with tab3:
         render_filing_explorer()
     with tab4:
-        render_cost_monitor()
-    with tab5:
-        render_pipeline_control()
-    with tab6:
-        render_eval_results()
-    with tab7:
         render_research_explorer()
+    with tab5:
+        render_cost_monitor()
+    with tab6:
+        render_pipeline_control()
+    with tab7:
+        render_eval_results()
 
     # Sidebar only shows Filing Explorer controls (rendered after tabs so it's always present)
     # but labeled clearly as belonging to the Explorer tab
