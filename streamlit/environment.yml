@@ -1,0 +1,7 @@
+name: sec-filing-dashboard
+channels:
+  - snowflake
+dependencies:
+  - snowflake-snowpark-python
+  - streamlit
+  - plotly

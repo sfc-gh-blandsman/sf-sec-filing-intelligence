@@ -1,0 +1,66 @@
+-- =============================================================================
+-- CONFIGURATION — Copy this file to 00_config.sql and fill in your values.
+-- DO NOT commit 00_config.sql (it's gitignored).
+-- =============================================================================
+
+SET config_database = 'SEC_FILINGS';
+SET config_schema = 'FILING_DATA';
+SET config_warehouse = 'FILING_WH';
+SET config_warehouse_build = 'FILING_BUILD_WH';
+SET config_warehouse_ingest = 'FILING_INGEST_WH';
+SET config_email_integration = 'MY_EMAIL_INT';
+SET config_email_recipient = 'you@company.com';
+SET config_eai_name = 'SEC_EDGAR_EAI';
+SET config_network_rule = 'EDGAR_NETWORK_RULE';
+SET config_user_agent = 'YourCompany SEC-Filing-Project your-email@company.com';
+SET config_search_service = 'SEC_FILING_SEARCH';
+SET config_semantic_view = 'SEC_FILING_ANALYTICS';
+SET config_agent_name = 'SEC_FILING_AGENT';
+SET config_agent_model = 'claude-opus-4-7';
+
+-- Ingestion scope (adjust for your needs)
+SET config_ingest_start_year = 2025;
+SET config_ingest_end_year = 2025;
+SET config_quick_start_limit = 100;  -- Set to NULL for full download
+-- Quick Start test date: 2025-02-21 (376 filings, ~15 min end-to-end)
+-- Set config_quick_start_limit = NULL for full year ingestion
+
+-- =============================================================================
+-- VALIDATION: Run this after pasting config to verify variables are set
+-- =============================================================================
+SELECT $config_database AS DATABASE_NAME, 
+       $config_schema AS SCHEMA_NAME, 
+       $config_warehouse AS WAREHOUSE_NAME,
+       $config_ingest_start_year AS START_YEAR;
+
+-- =============================================================================
+-- PERSIST CONFIG FOR TASK DAGs (tasks cannot access session variables)
+-- =============================================================================
+-- This writes config values to a table that task DAG bodies can read at runtime.
+-- On first run, _PIPELINE_CONFIG doesn't exist yet (created in Phase 1).
+-- The TRY/CATCH handles this gracefully. After Phase 1, re-run this script.
+
+USE DATABASE IDENTIFIER($config_database);
+USE SCHEMA IDENTIFIER($config_schema);
+
+BEGIN
+    INSERT OVERWRITE INTO _PIPELINE_CONFIG (KEY, VALUE) VALUES
+    ('database', $config_database),
+    ('schema', $config_schema),
+    ('warehouse', $config_warehouse),
+    ('warehouse_build', $config_warehouse_build),
+    ('warehouse_ingest', $config_warehouse_ingest),
+    ('email_integration', $config_email_integration),
+    ('email_recipient', $config_email_recipient),
+    ('user_agent', $config_user_agent),
+    ('search_service', $config_search_service),
+    ('semantic_view', $config_semantic_view),
+    ('agent_name', $config_agent_name),
+    ('ingest_start_year', $config_ingest_start_year::VARCHAR),
+    ('ingest_end_year', $config_ingest_end_year::VARCHAR);
+EXCEPTION
+    WHEN OTHER THEN
+        -- Table doesn't exist yet on first run (created in Phase 1).
+        -- Re-run this script after Phase 1 to persist config.
+        NULL;
+END;

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram id="pipeline-overview" name="Pipeline Overview">
+    <mxGraphModel dx="1500" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="SEC Filing Intelligence — Pipeline Overview" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=16;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="450" y="20" width="600" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- SEC EDGAR -->
+        <mxCell id="edgar" value="SEC EDGAR&#xa;Feed Archives&#xa;(daily tar.gz)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="625" y="80" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Feed Ingestion DAG -->
+        <mxCell id="feed" value="Feed Ingestion DAG&#xa;12 parallel monthly tasks&#xa;Streaming download + parse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="600" y="190" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- FILING_INDEX -->
+        <mxCell id="fi" value="FILING_INDEX&#xa;(metadata)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="520" y="300" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- FILING_CONTENT -->
+        <mxCell id="fc" value="FILING_CONTENT&#xa;(raw text)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="810" y="300" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Enrichment DAG -->
+        <mxCell id="enrich" value="Enrichment DAG&#xa;Ticker lookup + Industry mapping" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="400" y="410" width="220" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Processing DAG -->
+        <mxCell id="process" value="Processing DAG&#xa;Chunking + Signals + Metrics + Guidance&#xa;+ Normalization + Search Refresh" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="660" y="410" width="280" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- FILING_CHUNKS -->
+        <mxCell id="chunks" value="FILING_CHUNKS" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="680" y="520" width="110" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- FILING_SIGNALS -->
+        <mxCell id="signals" value="FILING_SIGNALS" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="830" y="520" width="110" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Cortex Search -->
+        <mxCell id="search" value="Cortex Search&#xa;(Arctic M-v1.5)&#xa;Semantic Retrieval" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cce5ff;strokeColor=#004085;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="620" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Semantic View -->
+        <mxCell id="semview" value="Semantic View&#xa;(Cortex Analyst)&#xa;Structured SQL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6d0de;strokeColor=#996699;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="620" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Cortex Agent -->
+        <mxCell id="agent" value="Cortex Agent&#xa;(claude-opus-4-7)&#xa;2-tool orchestrator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4edda;strokeColor=#28a745;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="620" y="730" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Streamlit -->
+        <mxCell id="streamlit" value="Streamlit Dashboard&#xa;(6 tabs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="870" y="730" width="140" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" style="endArrow=classic;html=1;strokeColor=#666;strokeWidth=2;" edge="1" parent="1" source="edgar" target="feed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="feed" target="fi">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="feed" target="fc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="fi" target="enrich">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="fc" target="process">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="enrich" target="process">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="process" target="chunks">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="process" target="signals">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" style="endArrow=classic;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="chunks" target="search">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="endArrow=classic;html=1;strokeColor=#996699;strokeWidth=2;" edge="1" parent="1" source="signals" target="semview">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" style="endArrow=classic;html=1;strokeColor=#28a745;strokeWidth=2;" edge="1" parent="1" source="search" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="endArrow=classic;html=1;strokeColor=#28a745;strokeWidth=2;" edge="1" parent="1" source="semview" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" style="endArrow=classic;html=1;strokeColor=#666;dashed=1;" edge="1" parent="1" source="search" target="streamlit">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

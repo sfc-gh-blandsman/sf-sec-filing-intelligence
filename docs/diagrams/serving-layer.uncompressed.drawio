@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram id="serving-layer" name="Serving Layer">
+    <mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Serving Layer — Search + Analytics + Agent" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=14;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="500" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Data sources -->
+        <mxCell id="chunks" value="FILING_CHUNKS&#xa;(section-aware text)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="150" y="100" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="signals" value="FILING_SIGNALS&#xa;(AI-extracted signals)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;size=10;" vertex="1" parent="1">
+          <mxGeometry x="150" y="250" width="150" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Cortex Search -->
+        <mxCell id="search" value="Cortex Search Service&#xa;─────────────────&#xa;Model: Arctic M-v1.5&#xa;Refresh: Incremental (PK-based)&#xa;Columns: CHUNK_TEXT + 9 attributes&#xa;Mode: ACTIVE serving" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cce5ff;strokeColor=#004085;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="450" y="70" width="250" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Semantic View -->
+        <mxCell id="semview" value="Semantic View&#xa;─────────────────&#xa;Tables: FILING_SIGNALS + FILING_INDEX&#xa;Dimensions: 11 (ticker, event_type, etc.)&#xa;Metrics: 10 (filing_count, sentiment_pct, etc.)&#xa;Facts: 6 (revenue, eps, guidance, etc.)&#xa;EVENT_TYPE uses COALESCE(normalized, raw)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6d0de;strokeColor=#996699;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="450" y="220" width="280" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Agent -->
+        <mxCell id="agent" value="Cortex Agent&#xa;─────────────────&#xa;Model: claude-opus-4-7&#xa;Tool 1: filing_semantic_search (Cortex Search)&#xa;Tool 2: filing_analyst (Cortex Analyst / Semantic View)&#xa;Budget: 1800s / 400K tokens" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4edda;strokeColor=#28a745;fontSize=9;align=left;spacingLeft=8;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="850" y="150" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- Streamlit -->
+        <mxCell id="streamlit" value="Streamlit Dashboard&#xa;─────────────────&#xa;Tab 1: Pipeline (DAG diagrams + progress)&#xa;Tab 2: Data Quality (scorecard + charts)&#xa;Tab 3: Filing Explorer (RAG chat)&#xa;Tab 4: Cost Monitor (credits + AI usage)&#xa;Tab 5: Pipeline Control (trigger + halt)&#xa;Tab 6: Agent Eval (scores + run button)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="850" y="320" width="300" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- Users -->
+        <mxCell id="users" value="Consumers&#xa;(SQL clients, Snowsight, API)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="930" y="520" width="200" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" style="endArrow=classic;html=1;strokeColor=#004085;strokeWidth=2;" edge="1" parent="1" source="chunks" target="search">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="endArrow=classic;html=1;strokeColor=#996699;strokeWidth=2;" edge="1" parent="1" source="signals" target="semview">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="Tool 1" style="endArrow=classic;html=1;strokeColor=#28a745;strokeWidth=2;" edge="1" parent="1" source="search" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="Tool 2" style="endArrow=classic;html=1;strokeColor=#28a745;strokeWidth=2;" edge="1" parent="1" source="semview" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="endArrow=classic;html=1;strokeColor=#666;dashed=1;" edge="1" parent="1" source="search" target="streamlit">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="agent" target="users">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" style="endArrow=classic;html=1;strokeColor=#666;" edge="1" parent="1" source="streamlit" target="users">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Annotations -->
+        <mxCell id="note1" value="Incremental refresh&#xa;(only new chunks embedded)" style="text;html=1;strokeColor=#cccccc;fillColor=#fffde7;align=left;fontSize=8;fontStyle=2;fontColor=#666;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="140" width="130" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="note2" value="Live query&#xa;(no materialization)" style="text;html=1;strokeColor=#cccccc;fillColor=#fffde7;align=left;fontSize=8;fontStyle=2;fontColor=#666;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="300" width="120" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
