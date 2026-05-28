@@ -1510,11 +1510,15 @@ def render_research_explorer():
                                         help="Limit how many companies to process. 0 means all companies in the sector.")
 
     # Show company count for selected sector
+    @st.cache_data(ttl=30)
+    def get_sector_count(sector):
+        return session.sql(f"SELECT COUNT(DISTINCT TICKER) AS cnt FROM FILING_INDEX WHERE INDUSTRY_SECTOR = '{sector}' AND TICKER IS NOT NULL").collect()[0]["CNT"]
+
     try:
-        cnt = session.sql(f"SELECT COUNT(DISTINCT TICKER) AS cnt FROM FILING_INDEX WHERE INDUSTRY_SECTOR = '{selected_sector}' AND TICKER IS NOT NULL").collect()[0]["CNT"]
+        cnt = get_sector_count(selected_sector)
         st.caption(f"{cnt} companies with tickers in {selected_sector} sector")
     except Exception:
-        pass
+        cnt = 0
 
     sector_mode_map = {"Excerpts": "excerpts", "Summarized": "summarized", "Compared": "compared"}
     sector_output = sector_mode_map.get(output_mode, "excerpts")
@@ -1523,13 +1527,17 @@ def render_research_explorer():
     limit_val = company_limit if company_limit > 0 else None
 
     # Show running explorer tasks
-    try:
-        running = session.sql("""
+    @st.cache_data(ttl=15)
+    def get_running_explorer_tasks():
+        return session.sql("""
             SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
                 SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
                 RESULT_LIMIT => 20
             )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
         """).collect()
+
+    try:
+        running = get_running_explorer_tasks()
         if running:
             st.info(f"{len(running)} sector analysis task(s) currently running: {', '.join(r['NAME'] for r in running)}")
     except Exception:
@@ -1558,6 +1566,7 @@ def render_research_explorer():
             probe_sec = time.time() - t0
             st.session_state["re_probe_sec"] = probe_sec
             st.session_state["re_show_confirm"] = True
+            st.rerun()
         except Exception as e:
             st.error(f"Probe failed: {str(e)[:200]}")
 
