@@ -1608,13 +1608,21 @@ def render_research_explorer():
                 limit_param_str = str(limit_val) if limit_val else "NULL"
                 total_companies = limit_val if limit_val else cnt
 
-                # Run timing probe with spinner (dialog is instant due to @st.fragment)
-                with st.spinner("Estimating runtime (probing 1 company)..."):
+                # Run timing probe with spinner — uses SEARCH_PREVIEW only (no write to EXPLORER_RESULTS)
+                with st.spinner("Estimating runtime (probing 1 search call)..."):
                     t0 = time.time()
                     try:
+                        import json as _json
+                        probe_request = _json.dumps({
+                            "query": section_str or "SEC filing disclosure",
+                            "columns": ["CHUNK_TEXT"],
+                            "limit": 5,
+                            "filter": {"@eq": {"INDUSTRY_SECTOR": selected_sector}}
+                        })
                         session.sql(f"""
-                            CALL EXPLORER_CUSTOM_ANALYSIS(
-                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
+                            SELECT SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
+                                '{SEARCH_SERVICE}',
+                                $${probe_request}$$
                             )
                         """).collect()
                         probe_sec = time.time() - t0
@@ -1713,6 +1721,7 @@ def render_research_explorer():
                                     f"Form: `{params.get('form_type', 'N/A')}`",
                                     f"Mode: `{params.get('output_mode', 'N/A')}`",
                                     f"Model: `{params.get('model', 'N/A')}`",
+                                    f"Limit: `{params.get('limit') or 'all'}`",
                                 ]
                                 st.markdown(f"**Search Parameters:** {' | '.join(param_parts)}")
                             except Exception:
