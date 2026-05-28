@@ -1,3 +1,5 @@
+# NOTE: This file is for WAREHOUSE RUNTIME only (legacy).
+# Container runtime uses pyproject.toml instead.
 name: sec-filing-dashboard
 channels:
   - snowflake

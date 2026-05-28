@@ -13,7 +13,6 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from snowflake.snowpark.context import get_active_session
 
 # =============================================================================
 # Configuration
@@ -21,7 +20,13 @@ from snowflake.snowpark.context import get_active_session
 
 st.set_page_config(page_title="SEC Filing Intelligence", layout="wide")
 
-session = get_active_session()
+# Session initialization — supports both container and warehouse runtimes
+try:
+    conn = st.connection("snowflake")
+    session = conn.session()
+except Exception:
+    from snowflake.snowpark.context import get_active_session
+    session = get_active_session()
 
 # Read config from _PIPELINE_CONFIG
 @st.cache_data(ttl=300)
@@ -1531,50 +1536,62 @@ def render_research_explorer():
         pass
 
     if st.button("Run for Entire Sector", key="re_sector_btn"):
-        with st.spinner(f"Running timing probe (1 company) to estimate full runtime..."):
-            try:
-                query_param = f"'{search_query}'" if search_query else "NULL"
-                section_param = f"'{section_str}'" if section_str else "NULL"
-                form_param = f"'{form_str}'" if form_str else "NULL"
-                limit_param = str(limit_val) if limit_val else "NULL"
+        # Run timing probe and show confirmation dialog
+        st.session_state["re_probe_params"] = {
+            "sector": selected_sector,
+            "query_param": f"'{search_query}'" if search_query else "NULL",
+            "section_param": f"'{section_str}'" if section_str else "NULL",
+            "form_param": f"'{form_str}'" if form_str else "NULL",
+            "sector_output": sector_output,
+            "limit_param": str(limit_val) if limit_val else "NULL",
+            "total_companies": limit_val if limit_val else cnt
+        }
+        # Run probe
+        try:
+            t0 = time.time()
+            params = st.session_state["re_probe_params"]
+            session.sql(f"""
+                CALL EXPLORER_CUSTOM_ANALYSIS(
+                    '{params["sector"]}', {params["query_param"]}, {params["section_param"]}, {params["form_param"]}, '{params["sector_output"]}', 1
+                )
+            """).collect()
+            probe_sec = time.time() - t0
+            st.session_state["re_probe_sec"] = probe_sec
+            st.session_state["re_show_confirm"] = True
+        except Exception as e:
+            st.error(f"Probe failed: {str(e)[:200]}")
 
-                # Timing probe: run 1 company to calibrate
-                import time as _time
-                t0 = _time.time()
-                session.sql(f"""
-                    CALL EXPLORER_CUSTOM_ANALYSIS(
-                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1
-                    )
-                """).collect()
-                probe_sec = _time.time() - t0
+    # Confirmation section (appears after probe completes)
+    if st.session_state.get("re_show_confirm"):
+        params = st.session_state.get("re_probe_params", {})
+        probe_sec = st.session_state.get("re_probe_sec", 0)
+        total_companies = params.get("total_companies", 0)
+        est_seconds = probe_sec * total_companies
+        if est_seconds < 120:
+            est_str = f"{est_seconds:.0f} seconds"
+        else:
+            est_str = f"{est_seconds / 60:.0f} minutes"
 
-                # Calculate estimate
-                total_companies = limit_val if limit_val else cnt
-                est_seconds = probe_sec * total_companies
-                if est_seconds < 120:
-                    est_str = f"{est_seconds:.0f} seconds"
-                else:
-                    est_str = f"{est_seconds / 60:.0f} minutes"
+        st.warning(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company with current filters)")
 
-                st.info(f"Timing probe: 1 company took {probe_sec:.1f}s with current filters. "
-                        f"Estimated full run: **~{est_str}** for {total_companies} companies "
-                        f"({probe_sec:.1f}s × {total_companies}).")
+        col_confirm, col_cancel = st.columns(2)
+        if col_confirm.button("Confirm & Execute", type="primary", key="re_confirm_exec"):
+            with st.spinner(f"Triggering async analysis for {params['sector']} sector..."):
+                try:
+                    result = session.sql(f"""
+                        CALL TRIGGER_SECTOR_ANALYSIS(
+                            '{params["sector"]}', {params["query_param"]}, {params["section_param"]}, {params["form_param"]}, '{params["sector_output"]}', {params["limit_param"]}
+                        )
+                    """).collect()
+                    if result:
+                        st.success(result[0][0])
+                except Exception as e:
+                    st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/05_trigger_sector_analysis.sql` first.")
+            st.session_state["re_show_confirm"] = False
 
-            except Exception as e:
-                st.warning(f"Probe failed ({str(e)[:100]}), proceeding with trigger anyway.")
-
-        # Now trigger the async task
-        with st.spinner(f"Triggering async analysis for {selected_sector} sector..."):
-            try:
-                result = session.sql(f"""
-                    CALL TRIGGER_SECTOR_ANALYSIS(
-                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param}
-                    )
-                """).collect()
-                if result:
-                    st.success(result[0][0])
-            except Exception as e:
-                st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/05_trigger_sector_analysis.sql` first.")
+        if col_cancel.button("Cancel", key="re_cancel"):
+            st.session_state["re_show_confirm"] = False
+            st.rerun()
 
     # View full-sector runs
     with st.expander("View Full-Sector Runs"):
