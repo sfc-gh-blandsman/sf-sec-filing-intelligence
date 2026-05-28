@@ -3,8 +3,9 @@ name = "sec-filing-intelligence"
 version = "2.0.0"
 description = "SEC Filing Intelligence Dashboard — Pipeline, Eval, Explorer, Cost"
 requires-python = ">=3.11"
-
-[project.dependencies]
-streamlit = ">=1.50.0"
-snowflake-snowpark-python = ">=1.10.0"
-plotly = ">=5.0.0"
+dependencies = [
+    "streamlit>=1.50.0",
+    "snowflake-snowpark-python>=1.10.0",
+    "plotly>=5.0.0",
+    "pandas",
+]
