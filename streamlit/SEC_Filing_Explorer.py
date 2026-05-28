@@ -1394,7 +1394,7 @@ def render_research_explorer():
                         filter_parts.append({"@eq": {"SECTION_NAME": section}})
                     filters = {"@and": filter_parts} if len(filter_parts) > 1 else filter_parts[0]
 
-                    query = search_query if search_query else f"{section or 'filing'} {ticker}"
+                    query = search_query if search_query else (section or "SEC filing disclosure")
                     try:
                         results = search_filings(query, filters=filters, limit=5)
                         for r in results:
@@ -1402,8 +1402,6 @@ def render_research_explorer():
                             # Date range filter (filed_at is text 'YYYY-MM-DD')
                             if filed and filed >= str(date_start) and filed <= str(date_end):
                                 accession = r.get("ACCESSION_NO", "")
-                                # Build EDGAR filing link from accession number
-                                edgar_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&accession={accession}&owner=include" if accession else ""
                                 all_results.append({
                                     "Ticker": ticker,
                                     "Company": r.get("COMPANY_NAME", ""),
@@ -1411,7 +1409,7 @@ def render_research_explorer():
                                     "Filed Date": filed,
                                     "Section": r.get("SECTION_NAME", ""),
                                     "Accession No": accession,
-                                    "EDGAR Link": edgar_url,
+                                    "EDGAR Link": "",  # populated below via batch lookup
                                     "Excerpt": r.get("CHUNK_TEXT", "")
                                 })
                     except Exception:
@@ -1422,6 +1420,22 @@ def render_research_explorer():
         if not all_results:
             st.warning("No results found for the given filters.")
             return
+
+        # Batch-lookup EDGAR filing URLs from FILING_INDEX
+        unique_accessions = list(set(r["Accession No"] for r in all_results if r["Accession No"]))
+        if unique_accessions:
+            accession_list = ",".join(f"'{a}'" for a in unique_accessions)
+            try:
+                url_rows = session.sql(f"""
+                    SELECT ACCESSION_NO, PRIMARY_DOC_URL
+                    FROM FILING_INDEX
+                    WHERE ACCESSION_NO IN ({accession_list})
+                """).collect()
+                url_map = {r["ACCESSION_NO"]: r["PRIMARY_DOC_URL"] for r in url_rows if r["PRIMARY_DOC_URL"]}
+                for r in all_results:
+                    r["EDGAR Link"] = url_map.get(r["Accession No"], "")
+            except Exception:
+                pass  # URLs remain empty if lookup fails
 
         st.success(f"Retrieved {len(all_results)} excerpts across {len(tickers)} ticker(s).")
 
@@ -1516,26 +1530,29 @@ def render_research_explorer():
                     "link": r.get("EDGAR Link", ""),
                 })
 
-            comparison_parts = []
-            for ticker, data in list(by_ticker.items())[:10]:
-                excerpt = data["excerpts"][0] if data["excerpts"] else ""
-                comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
-
-            context = "\n\n---\n\n".join(comparison_parts)
-            sections_str = ", ".join(sections)
-            prompt = f"Compare the {sections_str} sections across these companies. Identify 3-5 common themes and note how each company addresses them. Present as a markdown table with themes as rows and companies as columns:\n\n{context}"
-
-            with st.spinner("Generating comparison..."):
-                comparison = cortex_complete(research_model, prompt)
-            st.markdown(comparison)
-
-            # Source citations for comparison
-            with st.expander("Source Filings Used in Comparison"):
+            if len(by_ticker) < 2:
+                st.warning(f"Comparison requires at least 2 companies with results. Only found {len(by_ticker)}: {', '.join(by_ticker.keys())}. Try broadening your date range or section filters.")
+            else:
+                comparison_parts = []
                 for ticker, data in list(by_ticker.items())[:10]:
-                    st.markdown(f"**{data['company']} ({ticker})**")
-                    for s in data["sources"][:3]:
-                        link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
-                        st.caption(f"{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
+                    excerpt = data["excerpts"][0] if data["excerpts"] else ""
+                    comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
+
+                context = "\n\n---\n\n".join(comparison_parts)
+                sections_str = ", ".join(sections)
+                prompt = f"Compare the {sections_str} sections across these companies. Identify 3-5 common themes and note how each company addresses them. Present as a markdown table with themes as rows and companies as columns:\n\n{context}"
+
+                with st.spinner("Generating comparison..."):
+                    comparison = cortex_complete(research_model, prompt)
+                st.markdown(comparison)
+
+                # Source citations for comparison
+                with st.expander("Source Filings Used in Comparison"):
+                    for ticker, data in list(by_ticker.items())[:10]:
+                        st.markdown(f"**{data['company']} ({ticker})**")
+                        for s in data["sources"][:3]:
+                            link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
+                            st.caption(f"{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
 
     # -------------------------------------------------------------------------
     # Run for Entire Sector (isolated fragment — no full-page rerun on interaction)
@@ -1591,58 +1608,47 @@ def render_research_explorer():
                 limit_param_str = str(limit_val) if limit_val else "NULL"
                 total_companies = limit_val if limit_val else cnt
 
-                # Two-phase: first show dialog instantly, then user triggers estimate
-                if "re_probe_done" not in st.session_state:
-                    st.session_state["re_probe_done"] = False
-                    st.session_state["re_probe_sec"] = None
+                # Run timing probe with spinner (dialog is instant due to @st.fragment)
+                with st.spinner("Estimating runtime (probing 1 company)..."):
+                    t0 = time.time()
+                    try:
+                        session.sql(f"""
+                            CALL EXPLORER_CUSTOM_ANALYSIS(
+                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
+                            )
+                        """).collect()
+                        probe_sec = time.time() - t0
+                    except Exception as e:
+                        st.error(f"Probe failed: {str(e)[:200]}")
+                        return
 
-                if not st.session_state["re_probe_done"]:
-                    st.caption(f"Will process {total_companies} companies. Click below to estimate runtime.")
-                    if st.button("Calculate Estimate", key="dialog_estimate"):
-                        with st.spinner("Probing 1 company for timing..."):
-                            t0 = time.time()
-                            try:
-                                session.sql(f"""
-                                    CALL EXPLORER_CUSTOM_ANALYSIS(
-                                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
-                                    )
-                                """).collect()
-                                st.session_state["re_probe_sec"] = time.time() - t0
-                                st.session_state["re_probe_done"] = True
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Probe failed: {str(e)[:200]}")
+                # Show estimate
+                est_seconds = probe_sec * total_companies
+                if est_seconds < 120:
+                    est_str = f"{est_seconds:.0f} seconds"
                 else:
-                    probe_sec = st.session_state["re_probe_sec"]
-                    est_seconds = probe_sec * total_companies
-                    if est_seconds < 120:
-                        est_str = f"{est_seconds:.0f} seconds"
-                    else:
-                        est_str = f"{est_seconds / 60:.0f} minutes"
+                    est_str = f"{est_seconds / 60:.0f} minutes"
 
-                    st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
+                st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
 
-                    # Confirm button — disabled after click
-                    if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
-                                 disabled=st.session_state.get("re_executing", False)):
-                        st.session_state["re_executing"] = True
-                        with st.spinner("Triggering async analysis..."):
-                            try:
-                                result = session.sql(f"""
-                                    CALL TRIGGER_SECTOR_ANALYSIS(
-                                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
-                                    )
-                                """).collect()
-                                if result:
-                                    st.success(result[0][0])
-                            except Exception as e:
-                                st.error(f"Failed: {str(e)[:200]}")
-                        # Clean up state
-                        st.session_state["re_executing"] = False
-                        st.session_state["re_probe_done"] = False
-                        st.session_state["re_probe_sec"] = None
-                        time.sleep(2)
-                        st.rerun()
+                # Confirm button
+                if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
+                             disabled=st.session_state.get("re_executing", False)):
+                    st.session_state["re_executing"] = True
+                    with st.spinner("Triggering async analysis..."):
+                        try:
+                            result = session.sql(f"""
+                                CALL TRIGGER_SECTOR_ANALYSIS(
+                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
+                                )
+                            """).collect()
+                            if result:
+                                st.success(result[0][0])
+                        except Exception as e:
+                            st.error(f"Failed: {str(e)[:200]}")
+                    st.session_state["re_executing"] = False
+                    time.sleep(2)
+                    st.rerun()
 
             show_sector_confirm()
 
