@@ -1531,12 +1531,41 @@ def render_research_explorer():
         pass
 
     if st.button("Run for Entire Sector", key="re_sector_btn"):
-        with st.spinner(f"Triggering async analysis for {selected_sector} sector..."):
+        with st.spinner(f"Running timing probe (1 company) to estimate full runtime..."):
             try:
                 query_param = f"'{search_query}'" if search_query else "NULL"
                 section_param = f"'{section_str}'" if section_str else "NULL"
                 form_param = f"'{form_str}'" if form_str else "NULL"
                 limit_param = str(limit_val) if limit_val else "NULL"
+
+                # Timing probe: run 1 company to calibrate
+                import time as _time
+                t0 = _time.time()
+                session.sql(f"""
+                    CALL EXPLORER_CUSTOM_ANALYSIS(
+                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1
+                    )
+                """).collect()
+                probe_sec = _time.time() - t0
+
+                # Calculate estimate
+                total_companies = limit_val if limit_val else cnt
+                est_seconds = probe_sec * total_companies
+                if est_seconds < 120:
+                    est_str = f"{est_seconds:.0f} seconds"
+                else:
+                    est_str = f"{est_seconds / 60:.0f} minutes"
+
+                st.info(f"Timing probe: 1 company took {probe_sec:.1f}s with current filters. "
+                        f"Estimated full run: **~{est_str}** for {total_companies} companies "
+                        f"({probe_sec:.1f}s × {total_companies}).")
+
+            except Exception as e:
+                st.warning(f"Probe failed ({str(e)[:100]}), proceeding with trigger anyway.")
+
+        # Now trigger the async task
+        with st.spinner(f"Triggering async analysis for {selected_sector} sector..."):
+            try:
                 result = session.sql(f"""
                     CALL TRIGGER_SECTOR_ANALYSIS(
                         '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param}
