@@ -285,23 +285,9 @@ def render_pipeline_dashboard():
         done_all = int(df_progress["COMPLETED_DAYS"].sum())
         remaining = total_all - done_all
 
-        if remaining > 0 and executing_tasks:
-            # ETA: average seconds per completed feed task in current run
-            feed_completed = {k: v for k, v in task_states_raw.items()
-                            if k.startswith("T_FEED_") and k != "T_FEED_INGEST_ROOT"
-                            and v["state"] == "SUCCEEDED" and v.get("elapsed_sec")}
-            if feed_completed:
-                avg_month_sec = sum(v["elapsed_sec"] for v in feed_completed.values()) / len(feed_completed)
-                # Each month task handles ~21 days; estimate remaining months
-                remaining_months = remaining / 21
-                eta_sec = avg_month_sec * remaining_months / 12  # 12 parallel slots
-                if eta_sec < 3600:
-                    eta_str = f"{eta_sec/60:.0f} min"
-                else:
-                    eta_str = f"{eta_sec/3600:.1f} hrs"
-                st.caption(f"Estimated time remaining: ~{eta_str} (based on {len(feed_completed)} completed month tasks averaging {avg_month_sec/60:.0f} min each)")
-            else:
-                st.caption("ETA: calculating... (waiting for first month tasks to complete)")
+        if remaining > 0:
+            years_incomplete = len(df_progress[df_progress["COMPLETED_DAYS"] < df_progress["TOTAL_DAYS"]])
+            st.caption(f"{remaining} weekdays remaining across {years_incomplete} year(s)")
         elif remaining == 0:
             st.success("All feed ingestion complete!")
     else:
