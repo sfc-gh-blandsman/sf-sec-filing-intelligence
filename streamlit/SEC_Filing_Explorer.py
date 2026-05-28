@@ -1748,7 +1748,12 @@ def render_research_explorer():
                                     st.markdown(f"**{row['QUERY_TEXT']}:**")
                                     st.markdown(row["AGENT_RESPONSE"])
                                 elif qtype == "custom_excerpt":
-                                    st.caption(f"{row['QUERY_TEXT']}")
+                                    # QUERY_TEXT format: "TICKER | FILED_AT | SECTION | ACCESSION_NO | URL"
+                                    parts = [p.strip() for p in (row["QUERY_TEXT"] or "").split("|")]
+                                    meta = " | ".join(parts[:3])
+                                    url = parts[4] if len(parts) > 4 and parts[4].startswith("http") else ""
+                                    link_md = f" — [View on EDGAR]({url})" if url else ""
+                                    st.caption(f"{meta}{link_md}")
                                     st.text(row["AGENT_RESPONSE"][:1000] if row["AGENT_RESPONSE"] else "")
                                 else:
                                     st.markdown(f"**{row['QUERY_TYPE']}:** {row['QUERY_TEXT']}")

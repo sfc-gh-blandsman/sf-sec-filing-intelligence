@@ -134,7 +134,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                         "chunk_text": chunk.get("CHUNK_TEXT", "")[:4000],
                         "filed_at": chunk.get("FILED_AT", ""),
                         "section": chunk.get("SECTION_NAME", ""),
-                        "form_type": chunk.get("FORM_TYPE", "")
+                        "form_type": chunk.get("FORM_TYPE", ""),
+                        "accession_no": chunk.get("ACCESSION_NO", "")
                     })
         except Exception as e:
             all_results.append({
@@ -149,27 +150,48 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
     if not all_results:
         return f"No results found for sector {p_sector} with given filters."
 
-    # For excerpts mode: store raw results
+    # Batch-lookup EDGAR filing URLs from FILING_INDEX
+    unique_accessions = list(set(r["accession_no"] for r in all_results if r.get("accession_no")))
+    url_map = {}
+    if unique_accessions:
+        accession_list = ",".join(f"'{a}'" for a in unique_accessions[:500])
+        try:
+            url_rows = session.sql(f"""
+                SELECT ACCESSION_NO, PRIMARY_DOC_URL
+                FROM {fqn}.FILING_INDEX
+                WHERE ACCESSION_NO IN ({accession_list})
+            """).collect()
+            url_map = {r["ACCESSION_NO"]: r["PRIMARY_DOC_URL"] for r in url_rows if r["PRIMARY_DOC_URL"]}
+        except Exception:
+            pass
+
+    # For excerpts mode: store raw results with source links
     if p_output_mode == 'excerpts':
         for r in all_results:
+            acc = r.get("accession_no", "")
+            url = url_map.get(acc, "")
             session.sql(f"""
                 INSERT INTO {fqn}.EXPLORER_RESULTS
                     (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
                 VALUES ('{run_id}', '{esc(p_sector)}', 'custom_excerpt',
-                        '{esc(r["ticker"])} | {esc(r["filed_at"])} | {esc(r["section"])}',
+                        '{esc(r["ticker"])} | {esc(r["filed_at"])} | {esc(r["section"])} | {esc(acc)} | {esc(url)}',
                         '{esc(r["chunk_text"])}',
                         '{esc(query_params)}',
                         CURRENT_TIMESTAMP())
             """).collect()
 
     elif p_output_mode in ('summarized', 'compared'):
-        # Group chunks by company for LLM synthesis
+        # Group chunks by company for LLM synthesis (track accessions for source links)
         by_company = {}
         for r in all_results:
             key = r["ticker"]
             if key not in by_company:
-                by_company[key] = {"company": r["company"], "chunks": []}
+                by_company[key] = {"company": r["company"], "chunks": [], "sources": []}
             by_company[key]["chunks"].append(r["chunk_text"][:2000])
+            acc = r.get("accession_no", "")
+            if acc:
+                url = url_map.get(acc, "")
+                by_company[key]["sources"].append({"accession": acc, "url": url})
 
         if p_output_mode == 'summarized':
             for ticker, data in by_company.items():
@@ -182,6 +204,20 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                     summary = resp[0]["R"] if resp else "No summary generated"
                 except Exception as e:
                     summary = f"ERROR: {str(e)[:200]}"
+
+                # Append source filing links
+                sources = data.get("sources", [])
+                seen = set()
+                source_lines = []
+                for s in sources:
+                    if s["accession"] not in seen:
+                        seen.add(s["accession"])
+                        if s["url"]:
+                            source_lines.append(f"- [{s['accession']}]({s['url']})")
+                        else:
+                            source_lines.append(f"- {s['accession']}")
+                if source_lines:
+                    summary += "\n\n**Sources:**\n" + "\n".join(source_lines)
 
                 session.sql(f"""
                     INSERT INTO {fqn}.EXPLORER_RESULTS
@@ -209,6 +245,23 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 comparison = resp[0]["R"] if resp else "No comparison generated"
             except Exception as e:
                 comparison = f"ERROR: {str(e)[:200]}"
+
+            # Append source filing links per company
+            source_section = "\n\n**Sources:**"
+            for ticker, data in list(by_company.items())[:10]:
+                sources = data.get("sources", [])
+                seen = set()
+                links = []
+                for s in sources:
+                    if s["accession"] not in seen:
+                        seen.add(s["accession"])
+                        if s["url"]:
+                            links.append(f"[{s['accession']}]({s['url']})")
+                        else:
+                            links.append(s["accession"])
+                if links:
+                    source_section += f"\n- **{data['company']} ({ticker})**: {', '.join(links[:3])}"
+            comparison += source_section
 
             session.sql(f"""
                 INSERT INTO {fqn}.EXPLORER_RESULTS
