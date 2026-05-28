@@ -1539,8 +1539,13 @@ def render_research_explorer():
                     comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
 
                 context = "\n\n---\n\n".join(comparison_parts)
-                sections_str = ", ".join(sections)
-                prompt = f"Compare the {sections_str} sections across these companies. Identify 3-5 common themes and note how each company addresses them. Present as a markdown table with themes as rows and companies as columns:\n\n{context}"
+                sections_str = ", ".join(sections) if sections else "filings"
+                companies_str = ", ".join(f"{data['company']} ({t})" for t, data in list(by_ticker.items())[:10])
+                prompt = (
+                    f"Compare the {sections_str} across these {len(comparison_parts)} companies: {companies_str}. "
+                    f"Identify 3-5 common themes. Present as a markdown table with themes as rows and ALL {len(comparison_parts)} companies as columns. "
+                    f"If a company does not address a theme, write 'Not discussed'.\n\nExcerpts:\n\n{context}"
+                )
 
                 with st.spinner("Generating comparison..."):
                     comparison = cortex_complete(research_model, prompt)
