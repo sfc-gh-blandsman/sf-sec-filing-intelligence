@@ -1601,12 +1601,17 @@ def render_research_explorer():
                 st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
                 st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
 
+                # Run name input
+                run_name = st.text_input("Run Name", value=f"{selected_sector} - {section_str or 'All Sections'} ({sector_output})", key="dialog_run_name",
+                                         help="Give this run a descriptive name for easy identification later.")
+
                 # Build params (cheap, no SQL)
                 query_param = f"'{search_query}'" if search_query else "NULL"
                 section_param = f"'{section_str}'" if section_str else "NULL"
                 form_param = f"'{form_str}'" if form_str else "NULL"
                 limit_param_str = str(limit_val) if limit_val else "NULL"
                 total_companies = limit_val if limit_val else cnt
+                run_name_param = f"'{run_name.replace(chr(39), chr(39)+chr(39))}'" if run_name.strip() else "NULL"
 
                 # Run timing probe with spinner — uses SEARCH_PREVIEW only (no write to EXPLORER_RESULTS)
                 with st.spinner("Estimating runtime (probing 1 search call)..."):
@@ -1647,7 +1652,7 @@ def render_research_explorer():
                         try:
                             result = session.sql(f"""
                                 CALL TRIGGER_SECTOR_ANALYSIS(
-                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
+                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}', {run_name_param}
                                 )
                             """).collect()
                             if result:
@@ -1686,19 +1691,34 @@ def render_research_explorer():
             @st.cache_data(ttl=60)
             def get_explorer_runs():
                 return session.sql("""
-                    SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE,
-                           COUNT(*) AS RESULT_COUNT, MAX(RUN_TIMESTAMP) AS LAST_RUN
+                    SELECT RUN_ID, MAX(RUN_NAME) AS RUN_NAME, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE,
+                           COUNT(*) AS RESULT_COUNT,
+                           CONVERT_TIMEZONE('America/New_York', MAX(RUN_TIMESTAMP)) AS LAST_RUN_ET
                     FROM EXPLORER_RESULTS
                     GROUP BY RUN_ID
-                    ORDER BY LAST_RUN DESC
+                    ORDER BY MAX(RUN_TIMESTAMP) DESC
                     LIMIT 20
                 """).to_pandas()
 
             try:
                 runs = get_explorer_runs()
                 if not runs.empty:
-                    selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
-                    if selected_run:
+                    # Build display labels: "Run Name (timestamp)" or "RUN_ID (timestamp)" if no name
+                    run_labels = []
+                    for _, row in runs.iterrows():
+                        name = row["RUN_NAME"] if row["RUN_NAME"] else row["RUN_ID"]
+                        ts = row["LAST_RUN_ET"]
+                        ts_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, 'strftime') else str(ts)[:16]
+                        run_labels.append(f"{name} ({ts_str} ET)")
+                    
+                    selected_idx = st.selectbox("Select a run:", range(len(run_labels)), format_func=lambda i: run_labels[i], key="re_prev_run")
+                    selected_run = runs.iloc[selected_idx]["RUN_ID"]
+
+                    # Gate results behind a button click
+                    if st.button("View Results", key="re_view_results"):
+                        st.session_state["re_loaded_run"] = selected_run
+
+                    if st.session_state.get("re_loaded_run") == selected_run:
                         @st.cache_data(ttl=60)
                         def get_run_results(run_id):
                             return session.sql(f"""

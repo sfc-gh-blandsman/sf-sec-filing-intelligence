@@ -39,7 +39,8 @@ CREATE OR REPLACE PROCEDURE EXPLORER_CUSTOM_ANALYSIS(
     P_FORM_TYPE VARCHAR DEFAULT NULL,
     P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
     P_LIMIT INT DEFAULT NULL,
-    P_MODEL VARCHAR DEFAULT 'llama3.3-70b'
+    P_MODEL VARCHAR DEFAULT 'llama3.3-70b',
+    P_RUN_NAME VARCHAR DEFAULT NULL
 )
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -51,7 +52,7 @@ AS $$
 import json
 from datetime import datetime
 
-def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit, p_model):
+def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit, p_model, p_run_name):
     db = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
     schema = session.sql("SELECT CURRENT_SCHEMA()").collect()[0][0]
     fqn = f"{db}.{schema}"
@@ -170,10 +171,11 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
         for r in all_results:
             acc = r.get("accession_no", "")
             url = url_map.get(acc, "")
+            run_name_val = f"'{esc(p_run_name)}'" if p_run_name else "NULL"
             session.sql(f"""
                 INSERT INTO {fqn}.EXPLORER_RESULTS
-                    (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
-                VALUES ('{run_id}', '{esc(p_sector)}', 'custom_excerpt',
+                    (RUN_ID, RUN_NAME, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
+                VALUES ('{run_id}', {run_name_val}, '{esc(p_sector)}', 'custom_excerpt',
                         '{esc(r["ticker"])} | {esc(r["filed_at"])} | {esc(r["section"])} | {esc(acc)} | {esc(url)}',
                         '{esc(r["chunk_text"])}',
                         '{esc(query_params)}',
@@ -221,8 +223,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
 
                 session.sql(f"""
                     INSERT INTO {fqn}.EXPLORER_RESULTS
-                        (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
-                    VALUES ('{run_id}', '{esc(p_sector)}', 'custom_summary',
+                        (RUN_ID, RUN_NAME, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
+                    VALUES ('{run_id}', {f"'{esc(p_run_name)}'" if p_run_name else "NULL"}, '{esc(p_sector)}', 'custom_summary',
                             '{esc(ticker)} - {esc(data["company"])}',
                             '{esc(summary)}',
                             '{esc(query_params)}',
@@ -265,8 +267,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
 
             session.sql(f"""
                 INSERT INTO {fqn}.EXPLORER_RESULTS
-                    (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
-                VALUES ('{run_id}', '{esc(p_sector)}', 'custom_comparison',
+                    (RUN_ID, RUN_NAME, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
+                VALUES ('{run_id}', {f"'{esc(p_run_name)}'" if p_run_name else "NULL"}, '{esc(p_sector)}', 'custom_comparison',
                         'Cross-company {esc(section_label)} comparison',
                         '{esc(comparison)}',
                         '{esc(query_params)}',
