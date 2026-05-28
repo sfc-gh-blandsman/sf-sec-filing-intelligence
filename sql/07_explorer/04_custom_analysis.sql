@@ -73,7 +73,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
         "section": p_section,
         "form_type": p_form_type,
         "output_mode": p_output_mode,
-        "limit": p_limit
+        "limit": p_limit,
+        "model": p_model
     })
 
     # Get companies in sector, ordered by filing count (most active first)

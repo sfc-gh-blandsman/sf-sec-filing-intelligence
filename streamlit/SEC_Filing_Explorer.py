@@ -1401,12 +1401,17 @@ def render_research_explorer():
                             filed = r.get("FILED_AT", "")
                             # Date range filter (filed_at is text 'YYYY-MM-DD')
                             if filed and filed >= str(date_start) and filed <= str(date_end):
+                                accession = r.get("ACCESSION_NO", "")
+                                # Build EDGAR filing link from accession number
+                                edgar_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&accession={accession}&owner=include" if accession else ""
                                 all_results.append({
                                     "Ticker": ticker,
                                     "Company": r.get("COMPANY_NAME", ""),
                                     "Form Type": r.get("FORM_TYPE", ""),
                                     "Filed Date": filed,
                                     "Section": r.get("SECTION_NAME", ""),
+                                    "Accession No": accession,
+                                    "EDGAR Link": edgar_url,
                                     "Excerpt": r.get("CHUNK_TEXT", "")
                                 })
                     except Exception:
@@ -1445,30 +1450,42 @@ def render_research_explorer():
                     df_results = df_results.sort_values(["Ticker", "Year", "Filed Date"], ascending=[True, False, False])
 
             st.dataframe(
-                df_results[["Ticker", "Company", "Form Type", "Filed Date", "Section", "Excerpt"]],
-                use_container_width=True, hide_index=True, height=400
+                df_results[["Ticker", "Company", "Form Type", "Filed Date", "Section", "Accession No", "EDGAR Link", "Excerpt"]],
+                use_container_width=True, hide_index=True, height=400,
+                column_config={
+                    "EDGAR Link": st.column_config.LinkColumn("Source", display_text="View on EDGAR"),
+                }
             )
 
             # CSV download
             csv = df_results.to_csv(index=False)
-            st.download_button("Download as CSV", csv, "research_explorer_results.csv", "text/csv")
+            st.download_button("Download as CSV", csv, "research_explorer_results.csv", "text/csv", key="re_ticker_csv")
 
-            # Expandable full text
+            # Expandable full text with source citations
             with st.expander("Full Excerpt Text (expandable)"):
                 for i, r in enumerate(results[:50]):
-                    st.markdown(f"**{r['Ticker']}** | {r['Form Type']} | {r['Filed Date']} | {r['Section']}")
+                    accession = r.get("Accession No", "")
+                    link_md = f" | [EDGAR]({r['EDGAR Link']})" if r.get("EDGAR Link") else ""
+                    st.markdown(f"**{r['Ticker']}** | {r['Form Type']} | {r['Filed Date']} | {r['Section']} | `{accession}`{link_md}")
                     st.text(r["Excerpt"][:2000])
                     st.divider()
 
         elif mode == "Summarized":
             st.subheader("Per-Company Summaries")
-            # Group by ticker
+            # Group by ticker (include source metadata)
             by_ticker = {}
             for r in results:
                 key = r["Ticker"]
                 if key not in by_ticker:
-                    by_ticker[key] = {"company": r["Company"], "excerpts": []}
+                    by_ticker[key] = {"company": r["Company"], "excerpts": [], "sources": []}
                 by_ticker[key]["excerpts"].append(r["Excerpt"][:2000])
+                by_ticker[key]["sources"].append({
+                    "accession": r.get("Accession No", ""),
+                    "filed": r.get("Filed Date", ""),
+                    "form": r.get("Form Type", ""),
+                    "section": r.get("Section", ""),
+                    "link": r.get("EDGAR Link", ""),
+                })
 
             for ticker, data in by_ticker.items():
                 context = "\n\n".join(data["excerpts"][:5])
@@ -1477,20 +1494,27 @@ def render_research_explorer():
                     summary = cortex_complete(research_model, prompt)
                 st.markdown(f"### {data['company']} ({ticker})")
                 st.markdown(summary)
-                with st.expander(f"Source excerpts ({len(data['excerpts'])})"):
-                    for e in data["excerpts"][:3]:
-                        st.caption(e[:500])
+                with st.expander(f"Sources ({len(data['sources'])} filings)"):
+                    for s in data["sources"]:
+                        link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
+                        st.caption(f"{s['form']} | Filed {s['filed']} | {s['section']} | `{s['accession']}`{link_md}")
                 st.divider()
 
         elif mode == "Compared":
             st.subheader("Cross-Company Comparison")
-            # Build comparison
+            # Build comparison (include source metadata)
             by_ticker = {}
             for r in results:
                 key = r["Ticker"]
                 if key not in by_ticker:
-                    by_ticker[key] = {"company": r["Company"], "excerpts": []}
+                    by_ticker[key] = {"company": r["Company"], "excerpts": [], "sources": []}
                 by_ticker[key]["excerpts"].append(r["Excerpt"][:1500])
+                by_ticker[key]["sources"].append({
+                    "accession": r.get("Accession No", ""),
+                    "filed": r.get("Filed Date", ""),
+                    "form": r.get("Form Type", ""),
+                    "link": r.get("EDGAR Link", ""),
+                })
 
             comparison_parts = []
             for ticker, data in list(by_ticker.items())[:10]:
@@ -1505,195 +1529,240 @@ def render_research_explorer():
                 comparison = cortex_complete(research_model, prompt)
             st.markdown(comparison)
 
+            # Source citations for comparison
+            with st.expander("Source Filings Used in Comparison"):
+                for ticker, data in list(by_ticker.items())[:10]:
+                    st.markdown(f"**{data['company']} ({ticker})**")
+                    for s in data["sources"][:3]:
+                        link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
+                        st.caption(f"{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
+
     # -------------------------------------------------------------------------
-    # Run for Entire Sector
+    # Run for Entire Sector (isolated fragment — no full-page rerun on interaction)
     # -------------------------------------------------------------------------
-    st.divider()
-    st.subheader("Run for Entire Sector")
-    st.caption("Apply current filters to ALL companies in a sector. Runs asynchronously — results appear as companies are processed.")
+    @st.fragment
+    def sector_analysis_fragment():
+        st.divider()
+        st.subheader("Run for Entire Sector")
+        st.caption("Apply current filters to ALL companies in a sector. Runs asynchronously — results appear as companies are processed.")
 
-    sector_options = ["Technology", "Life Sciences", "Finance", "Real Estate & Construction",
-                      "Energy & Transportation", "Manufacturing", "Trade & Services", "Crypto Assets", "Other"]
-    col_s1, col_s2 = st.columns([2, 1])
-    with col_s1:
-        selected_sector = st.selectbox("Target Sector", sector_options, key="re_sector")
-    with col_s2:
-        company_limit = st.number_input("Company Limit (0 = all)", min_value=0, value=0, key="re_limit",
-                                        help="Limit how many companies to process. 0 means all companies in the sector.")
+        sector_options = ["Technology", "Life Sciences", "Finance", "Real Estate & Construction",
+                          "Energy & Transportation", "Manufacturing", "Trade & Services", "Crypto Assets", "Other"]
+        col_s1, col_s2 = st.columns([2, 1])
+        with col_s1:
+            selected_sector = st.selectbox("Target Sector", sector_options, key="re_sector")
+        with col_s2:
+            company_limit = st.number_input("Company Limit (0 = all)", min_value=0, value=0, key="re_limit",
+                                            help="Limit how many companies to process. 0 means all companies in the sector.")
 
-    # Show company count for selected sector (pre-fetched, no per-switch SQL)
-    @st.cache_data(ttl=300)
-    def get_all_sector_counts():
-        return session.sql("""
-            SELECT INDUSTRY_SECTOR, COUNT(DISTINCT TICKER) AS cnt
-            FROM FILING_INDEX WHERE TICKER IS NOT NULL
-            GROUP BY 1
-        """).to_pandas()
-
-    try:
-        sector_counts = get_all_sector_counts()
-        match = sector_counts[sector_counts["INDUSTRY_SECTOR"] == selected_sector]
-        cnt = int(match["CNT"].iloc[0]) if not match.empty else 0
-        st.caption(f"{cnt} companies with tickers in {selected_sector} sector")
-    except Exception:
-        cnt = 0
-
-    sector_mode_map = {"Excerpts": "excerpts", "Summarized": "summarized", "Compared": "compared"}
-    sector_output = sector_mode_map.get(output_mode, "excerpts")
-    section_str = sections[0] if sections else None
-    form_str = form_types[0] if form_types else None
-    limit_val = company_limit if company_limit > 0 else None
-
-    if st.button("Run for Entire Sector", key="re_sector_btn"):
-        @st.dialog("Run for Entire Sector")
-        def show_sector_confirm():
-            st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
-            st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
-
-            # Build params (cheap, no SQL)
-            query_param = f"'{search_query}'" if search_query else "NULL"
-            section_param = f"'{section_str}'" if section_str else "NULL"
-            form_param = f"'{form_str}'" if form_str else "NULL"
-            limit_param_str = str(limit_val) if limit_val else "NULL"
-            total_companies = limit_val if limit_val else cnt
-
-            # Two-phase: first show dialog instantly, then user triggers estimate
-            if "re_probe_done" not in st.session_state:
-                st.session_state["re_probe_done"] = False
-                st.session_state["re_probe_sec"] = None
-
-            if not st.session_state["re_probe_done"]:
-                st.caption(f"Will process {total_companies} companies. Click below to estimate runtime.")
-                if st.button("Calculate Estimate", key="dialog_estimate"):
-                    with st.spinner("Probing 1 company for timing..."):
-                        t0 = time.time()
-                        try:
-                            session.sql(f"""
-                                CALL EXPLORER_CUSTOM_ANALYSIS(
-                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
-                                )
-                            """).collect()
-                            st.session_state["re_probe_sec"] = time.time() - t0
-                            st.session_state["re_probe_done"] = True
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Probe failed: {str(e)[:200]}")
-            else:
-                probe_sec = st.session_state["re_probe_sec"]
-                est_seconds = probe_sec * total_companies
-                if est_seconds < 120:
-                    est_str = f"{est_seconds:.0f} seconds"
-                else:
-                    est_str = f"{est_seconds / 60:.0f} minutes"
-
-                st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
-
-                # Confirm button — disabled after click
-                if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
-                             disabled=st.session_state.get("re_executing", False)):
-                    st.session_state["re_executing"] = True
-                    with st.spinner("Triggering async analysis..."):
-                        try:
-                            result = session.sql(f"""
-                                CALL TRIGGER_SECTOR_ANALYSIS(
-                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
-                                )
-                            """).collect()
-                            if result:
-                                st.success(result[0][0])
-                        except Exception as e:
-                            st.error(f"Failed: {str(e)[:200]}")
-                    # Clean up state
-                    st.session_state["re_executing"] = False
-                    st.session_state["re_probe_done"] = False
-                    st.session_state["re_probe_sec"] = None
-                    time.sleep(2)
-                    st.rerun()
-
-        show_sector_confirm()
-
-    # View full-sector runs
-    with st.expander("View Full-Sector Runs"):
-        if st.button("Refresh", key="re_refresh"):
-            st.cache_data.clear()
-
-        # Cached: running tasks
-        @st.cache_data(ttl=30)
-        def get_running_explorer_tasks():
+        # Show company count for selected sector (pre-fetched, no per-switch SQL)
+        @st.cache_data(ttl=300)
+        def get_all_sector_counts():
             return session.sql("""
-                SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
-                    SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
-                    RESULT_LIMIT => 20
-                )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
-            """).collect()
-
-        try:
-            running = get_running_explorer_tasks()
-            if running:
-                st.info(f"{len(running)} task(s) running: {', '.join(r['NAME'] for r in running)}")
-        except Exception:
-            pass
-
-        # Cached: previous runs list
-        @st.cache_data(ttl=60)
-        def get_explorer_runs():
-            return session.sql("""
-                SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE, MAX(RUN_TIMESTAMP) AS LAST_RUN
-                FROM EXPLORER_RESULTS
-                GROUP BY RUN_ID
-                ORDER BY LAST_RUN DESC
-                LIMIT 20
+                SELECT INDUSTRY_SECTOR, COUNT(DISTINCT TICKER) AS cnt
+                FROM FILING_INDEX WHERE TICKER IS NOT NULL
+                GROUP BY 1
             """).to_pandas()
 
         try:
-            runs = get_explorer_runs()
-            if not runs.empty:
-                selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
-                if selected_run:
-                    @st.cache_data(ttl=60)
-                    def get_run_results(run_id):
-                        return session.sql(f"""
-                            SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS
-                            FROM EXPLORER_RESULTS
-                            WHERE RUN_ID = '{run_id}'
-                            ORDER BY RUN_TIMESTAMP
-                        """).collect()
+            sector_counts = get_all_sector_counts()
+            match = sector_counts[sector_counts["INDUSTRY_SECTOR"] == selected_sector]
+            cnt = int(match["CNT"].iloc[0]) if not match.empty else 0
+            st.caption(f"{cnt} companies with tickers in {selected_sector} sector")
+        except Exception:
+            cnt = 0
 
-                    run_rows = get_run_results(selected_run)
+        sector_mode_map = {"Excerpts": "excerpts", "Summarized": "summarized", "Compared": "compared"}
+        sector_output = sector_mode_map.get(output_mode, "excerpts")
+        section_str = sections[0] if sections else None
+        form_str = form_types[0] if form_types else None
+        limit_val = company_limit if company_limit > 0 else None
 
-                    # Show search parameters header
-                    if run_rows and run_rows[0]["QUERY_PARAMS"]:
-                        try:
-                            params = json.loads(run_rows[0]["QUERY_PARAMS"])
-                            st.markdown(f"**Search Parameters:** Sector: `{params.get('sector', 'N/A')}` | Query: `{params.get('query', 'None')}` | Section: `{params.get('section', 'N/A')}` | Form: `{params.get('form_type', 'N/A')}` | Mode: `{params.get('output_mode', 'N/A')}`")
-                        except Exception:
-                            pass
-                    st.caption(f"{len(run_rows)} result(s)")
-                    st.divider()
+        if st.button("Run for Entire Sector", key="re_sector_btn"):
+            @st.dialog("Run for Entire Sector")
+            def show_sector_confirm():
+                st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
+                st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
 
-                    for row in run_rows:
-                        qtype = row["QUERY_TYPE"]
-                        if qtype == "custom_comparison":
-                            st.markdown("**Cross-Company Comparison:**")
-                            st.markdown(row["AGENT_RESPONSE"])
-                        elif qtype == "custom_summary":
-                            st.markdown(f"**{row['QUERY_TEXT']}:**")
-                            st.markdown(row["AGENT_RESPONSE"])
-                        elif qtype == "custom_excerpt":
-                            st.caption(f"{row['QUERY_TEXT']}")
-                            st.text(row["AGENT_RESPONSE"][:1000] if row["AGENT_RESPONSE"] else "")
-                        else:
-                            st.markdown(f"**{row['QUERY_TYPE']}:** {row['QUERY_TEXT']}")
-                            st.markdown(row["AGENT_RESPONSE"] or "")
-                        st.divider()
-            else:
-                st.info("No previous runs yet.")
-        except Exception as e:
-            err = str(e)
-            if "does not exist" in err:
-                st.info("EXPLORER_RESULTS table not found. Deploy `sql/07_explorer/01_batch_sp.sql` first.")
-            else:
-                st.error(f"Error loading previous runs: {err[:200]}")
+                # Build params (cheap, no SQL)
+                query_param = f"'{search_query}'" if search_query else "NULL"
+                section_param = f"'{section_str}'" if section_str else "NULL"
+                form_param = f"'{form_str}'" if form_str else "NULL"
+                limit_param_str = str(limit_val) if limit_val else "NULL"
+                total_companies = limit_val if limit_val else cnt
+
+                # Two-phase: first show dialog instantly, then user triggers estimate
+                if "re_probe_done" not in st.session_state:
+                    st.session_state["re_probe_done"] = False
+                    st.session_state["re_probe_sec"] = None
+
+                if not st.session_state["re_probe_done"]:
+                    st.caption(f"Will process {total_companies} companies. Click below to estimate runtime.")
+                    if st.button("Calculate Estimate", key="dialog_estimate"):
+                        with st.spinner("Probing 1 company for timing..."):
+                            t0 = time.time()
+                            try:
+                                session.sql(f"""
+                                    CALL EXPLORER_CUSTOM_ANALYSIS(
+                                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
+                                    )
+                                """).collect()
+                                st.session_state["re_probe_sec"] = time.time() - t0
+                                st.session_state["re_probe_done"] = True
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Probe failed: {str(e)[:200]}")
+                else:
+                    probe_sec = st.session_state["re_probe_sec"]
+                    est_seconds = probe_sec * total_companies
+                    if est_seconds < 120:
+                        est_str = f"{est_seconds:.0f} seconds"
+                    else:
+                        est_str = f"{est_seconds / 60:.0f} minutes"
+
+                    st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
+
+                    # Confirm button — disabled after click
+                    if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
+                                 disabled=st.session_state.get("re_executing", False)):
+                        st.session_state["re_executing"] = True
+                        with st.spinner("Triggering async analysis..."):
+                            try:
+                                result = session.sql(f"""
+                                    CALL TRIGGER_SECTOR_ANALYSIS(
+                                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
+                                    )
+                                """).collect()
+                                if result:
+                                    st.success(result[0][0])
+                            except Exception as e:
+                                st.error(f"Failed: {str(e)[:200]}")
+                        # Clean up state
+                        st.session_state["re_executing"] = False
+                        st.session_state["re_probe_done"] = False
+                        st.session_state["re_probe_sec"] = None
+                        time.sleep(2)
+                        st.rerun()
+
+            show_sector_confirm()
+
+        # View full-sector runs
+        with st.expander("View Full-Sector Runs"):
+            if st.button("Refresh", key="re_refresh"):
+                st.cache_data.clear()
+
+            # Cached: running tasks
+            @st.cache_data(ttl=30)
+            def get_running_explorer_tasks():
+                return session.sql("""
+                    SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                        SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
+                        RESULT_LIMIT => 20
+                    )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
+                """).collect()
+
+            try:
+                running = get_running_explorer_tasks()
+                if running:
+                    st.info(f"{len(running)} task(s) running: {', '.join(r['NAME'] for r in running)}")
+            except Exception:
+                pass
+
+            # Cached: previous runs list
+            @st.cache_data(ttl=60)
+            def get_explorer_runs():
+                return session.sql("""
+                    SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE,
+                           COUNT(*) AS RESULT_COUNT, MAX(RUN_TIMESTAMP) AS LAST_RUN
+                    FROM EXPLORER_RESULTS
+                    GROUP BY RUN_ID
+                    ORDER BY LAST_RUN DESC
+                    LIMIT 20
+                """).to_pandas()
+
+            try:
+                runs = get_explorer_runs()
+                if not runs.empty:
+                    selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
+                    if selected_run:
+                        @st.cache_data(ttl=60)
+                        def get_run_results(run_id):
+                            return session.sql(f"""
+                                SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP
+                                FROM EXPLORER_RESULTS
+                                WHERE RUN_ID = '{run_id}'
+                                ORDER BY RUN_TIMESTAMP
+                            """).to_pandas()
+
+                        run_df = get_run_results(selected_run)
+
+                        # Show search parameters header (with model)
+                        if not run_df.empty and run_df.iloc[0]["QUERY_PARAMS"]:
+                            try:
+                                params = json.loads(run_df.iloc[0]["QUERY_PARAMS"])
+                                param_parts = [
+                                    f"Sector: `{params.get('sector', 'N/A')}`",
+                                    f"Query: `{params.get('query', 'None')}`",
+                                    f"Section: `{params.get('section', 'N/A')}`",
+                                    f"Form: `{params.get('form_type', 'N/A')}`",
+                                    f"Mode: `{params.get('output_mode', 'N/A')}`",
+                                    f"Model: `{params.get('model', 'N/A')}`",
+                                ]
+                                st.markdown(f"**Search Parameters:** {' | '.join(param_parts)}")
+                            except Exception:
+                                pass
+
+                        # --- Tabbed visualization ---
+                        run_tab1, run_tab2, run_tab3 = st.tabs(["Summary", "Details", "Raw Data"])
+
+                        with run_tab1:
+                            st.caption(f"{len(run_df)} result(s) in this run")
+                            # Results breakdown by query_type
+                            if not run_df.empty:
+                                type_counts = run_df["QUERY_TYPE"].value_counts()
+                                for qtype, count in type_counts.items():
+                                    st.write(f"- **{qtype}**: {count} results")
+
+                        with run_tab2:
+                            for _, row in run_df.iterrows():
+                                qtype = row["QUERY_TYPE"]
+                                if qtype == "custom_comparison":
+                                    st.markdown("**Cross-Company Comparison:**")
+                                    st.markdown(row["AGENT_RESPONSE"])
+                                elif qtype == "custom_summary":
+                                    st.markdown(f"**{row['QUERY_TEXT']}:**")
+                                    st.markdown(row["AGENT_RESPONSE"])
+                                elif qtype == "custom_excerpt":
+                                    st.caption(f"{row['QUERY_TEXT']}")
+                                    st.text(row["AGENT_RESPONSE"][:1000] if row["AGENT_RESPONSE"] else "")
+                                else:
+                                    st.markdown(f"**{row['QUERY_TYPE']}:** {row['QUERY_TEXT']}")
+                                    st.markdown(row["AGENT_RESPONSE"] or "")
+                                st.divider()
+
+                        with run_tab3:
+                            st.dataframe(run_df, use_container_width=True, hide_index=True, height=400)
+                            # SQL query for reproducibility
+                            st.code(f"SELECT * FROM SEC_FILINGS.FILING_DATA.EXPLORER_RESULTS WHERE RUN_ID = '{selected_run}' ORDER BY RUN_TIMESTAMP;", language="sql")
+                            # CSV download
+                            csv_data = run_df.to_csv(index=False)
+                            st.download_button(
+                                "Download Results as CSV",
+                                csv_data,
+                                f"explorer_run_{selected_run}.csv",
+                                "text/csv",
+                                key="re_download_csv"
+                            )
+                else:
+                    st.info("No previous runs yet.")
+            except Exception as e:
+                err = str(e)
+                if "does not exist" in err:
+                    st.info("EXPLORER_RESULTS table not found. Deploy `sql/07_explorer/01_batch_sp.sql` first.")
+                else:
+                    st.error(f"Error loading previous runs: {err[:200]}")
+
+    sector_analysis_fragment()
 
 
 # =============================================================================
