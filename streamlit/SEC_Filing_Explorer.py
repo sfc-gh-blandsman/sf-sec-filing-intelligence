@@ -1333,8 +1333,10 @@ def render_research_explorer():
         )
 
     with col_right:
-        form_types = st.multiselect("Filing Type", ["10-K", "10-Q", "8-K"], default=["10-K"], key="re_form")
-        sections = st.multiselect("Section Filter", SECTION_OPTIONS, default=["Risk Factors"], key="re_sections")
+        form_types = st.multiselect("Filing Type", ["10-K", "10-Q", "8-K"], default=["10-K"], key="re_form",
+                                    help="Leave empty to search all form types.")
+        sections = st.multiselect("Section Filter", SECTION_OPTIONS, default=["Risk Factors"], key="re_sections",
+                                  help="Leave empty to search all sections.")
         from datetime import date, timedelta
         date_start = st.date_input("Start Date", value=date.today() - timedelta(days=730), key="re_start")
         date_end = st.date_input("End Date", value=date.today(), key="re_end")
@@ -1361,17 +1363,21 @@ def render_research_explorer():
         for i, ticker in enumerate(tickers):
             progress.progress((i + 1) / len(tickers))
 
-            for section in sections:
-                for form_type in form_types:
-                    # Build filter
-                    filter_parts = [
-                        {"@eq": {"TICKER": ticker}},
-                        {"@eq": {"FORM_TYPE": form_type}},
-                        {"@eq": {"SECTION_NAME": section}}
-                    ]
-                    filters = {"@and": filter_parts}
+            # Build section/form combinations (empty = search all)
+            section_list = sections if sections else [None]
+            form_list = form_types if form_types else [None]
 
-                    query = search_query if search_query else f"{section} {ticker}"
+            for section in section_list:
+                for form_type in form_list:
+                    # Build filter - only include non-None conditions
+                    filter_parts = [{"@eq": {"TICKER": ticker}}]
+                    if form_type:
+                        filter_parts.append({"@eq": {"FORM_TYPE": form_type}})
+                    if section:
+                        filter_parts.append({"@eq": {"SECTION_NAME": section}})
+                    filters = {"@and": filter_parts} if len(filter_parts) > 1 else filter_parts[0]
+
+                    query = search_query if search_query else f"{section or 'filing'} {ticker}"
                     try:
                         results = search_filings(query, filters=filters, limit=5)
                         for r in results:
@@ -1487,34 +1493,64 @@ def render_research_explorer():
     # -------------------------------------------------------------------------
     st.divider()
     st.subheader("Run for Entire Sector")
-    st.caption("Apply current filters to ALL companies in a sector. Results stored for later review.")
+    st.caption("Apply current filters to ALL companies in a sector. Runs asynchronously — results appear as companies are processed.")
 
     sector_options = ["Technology", "Life Sciences", "Finance", "Real Estate & Construction",
                       "Energy & Transportation", "Manufacturing", "Trade & Services", "Crypto Assets", "Other"]
-    selected_sector = st.selectbox("Target Sector", sector_options, key="re_sector")
+    col_s1, col_s2 = st.columns([2, 1])
+    with col_s1:
+        selected_sector = st.selectbox("Target Sector", sector_options, key="re_sector")
+    with col_s2:
+        company_limit = st.number_input("Company Limit (0 = all)", min_value=0, value=0, key="re_limit",
+                                        help="Limit how many companies to process. 0 means all companies in the sector.")
+
+    # Show company count for selected sector
+    try:
+        cnt = session.sql(f"SELECT COUNT(DISTINCT TICKER) AS cnt FROM FILING_INDEX WHERE INDUSTRY_SECTOR = '{selected_sector}' AND TICKER IS NOT NULL").collect()[0]["CNT"]
+        st.caption(f"{cnt} companies with tickers in {selected_sector} sector")
+    except Exception:
+        pass
 
     sector_mode_map = {"Excerpts": "excerpts", "Summarized": "summarized", "Compared": "compared"}
     sector_output = sector_mode_map.get(output_mode, "excerpts")
-    section_str = sections[0] if sections else "Risk Factors"
-    form_str = form_types[0] if form_types else "10-K"
+    section_str = sections[0] if sections else None
+    form_str = form_types[0] if form_types else None
+    limit_val = company_limit if company_limit > 0 else None
+
+    # Show running explorer tasks
+    try:
+        running = session.sql("""
+            SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
+                RESULT_LIMIT => 20
+            )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
+        """).collect()
+        if running:
+            st.info(f"{len(running)} sector analysis task(s) currently running: {', '.join(r['NAME'] for r in running)}")
+    except Exception:
+        pass
 
     if st.button("Run for Entire Sector", key="re_sector_btn"):
-        with st.spinner(f"Running analysis for {selected_sector} sector..."):
+        with st.spinner(f"Triggering async analysis for {selected_sector} sector..."):
             try:
                 query_param = f"'{search_query}'" if search_query else "NULL"
+                section_param = f"'{section_str}'" if section_str else "NULL"
+                form_param = f"'{form_str}'" if form_str else "NULL"
+                limit_param = str(limit_val) if limit_val else "NULL"
                 result = session.sql(f"""
-                    CALL EXPLORER_CUSTOM_ANALYSIS(
-                        '{selected_sector}', {query_param}, '{section_str}', '{form_str}', '{sector_output}'
+                    CALL TRIGGER_SECTOR_ANALYSIS(
+                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param}
                     )
                 """).collect()
                 if result:
                     st.success(result[0][0])
-                st.cache_data.clear()
             except Exception as e:
-                st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/04_custom_analysis.sql` first.")
+                st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/05_trigger_sector_analysis.sql` first.")
 
-    # View previous runs
-    with st.expander("View Previous Runs"):
+    # View full-sector runs
+    with st.expander("View Full-Sector Runs"):
+        if st.button("Refresh", key="re_refresh"):
+            st.cache_data.clear()
         try:
             runs = session.sql("""
                 SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE, MAX(RUN_TIMESTAMP) AS LAST_RUN

@@ -8,9 +8,10 @@
 -- Parameters:
 --   P_SECTOR      — Industry sector to analyze (from FILING_INDEX.INDUSTRY_SECTOR)
 --   P_QUERY       — Optional semantic search query (NULL = retrieve by metadata only)
---   P_SECTION     — Section filter (e.g., 'Risk Factors', 'MD&A')
---   P_FORM_TYPE   — Form type filter (e.g., '10-K', '10-Q', '8-K')
+--   P_SECTION     — Section filter (NULL = all sections)
+--   P_FORM_TYPE   — Form type filter (NULL = all form types)
 --   P_OUTPUT_MODE — 'excerpts' (no LLM), 'summarized', or 'compared'
+--   P_LIMIT       — Max companies to process (NULL = all companies in sector)
 --
 -- Results stored in EXPLORER_RESULTS with QUERY_PARAMS for audit trail.
 --
@@ -34,9 +35,10 @@ USE WAREHOUSE IDENTIFIER($config_warehouse);
 CREATE OR REPLACE PROCEDURE EXPLORER_CUSTOM_ANALYSIS(
     P_SECTOR VARCHAR,
     P_QUERY TEXT DEFAULT NULL,
-    P_SECTION VARCHAR DEFAULT 'Risk Factors',
-    P_FORM_TYPE VARCHAR DEFAULT '10-K',
-    P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts'
+    P_SECTION VARCHAR DEFAULT NULL,
+    P_FORM_TYPE VARCHAR DEFAULT NULL,
+    P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
+    P_LIMIT INT DEFAULT NULL
 )
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -48,7 +50,7 @@ AS $$
 import json
 from datetime import datetime
 
-def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode):
+def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit):
     db = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
     schema = session.sql("SELECT CURRENT_SCHEMA()").collect()[0][0]
     fqn = f"{db}.{schema}"
@@ -69,17 +71,20 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
         "query": p_query,
         "section": p_section,
         "form_type": p_form_type,
-        "output_mode": p_output_mode
+        "output_mode": p_output_mode,
+        "limit": p_limit
     })
 
-    # Get all tickers in the sector
+    # Get companies in sector, ordered by filing count (most active first)
+    limit_clause = f"LIMIT {p_limit}" if p_limit else ""
     tickers_df = session.sql(f"""
-        SELECT DISTINCT TICKER, COMPANY_NAME
+        SELECT TICKER, COMPANY_NAME, COUNT(*) AS cnt
         FROM {fqn}.FILING_INDEX
-        WHERE INDUSTRY_SECTOR = '{p_sector}'
+        WHERE INDUSTRY_SECTOR = '{esc(p_sector)}'
           AND TICKER IS NOT NULL
-        ORDER BY COMPANY_NAME
-        LIMIT 50
+        GROUP BY TICKER, COMPANY_NAME
+        ORDER BY cnt DESC
+        {limit_clause}
     """).collect()
 
     if not tickers_df:
@@ -93,13 +98,17 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
         ticker = row["TICKER"]
         company = row["COMPANY_NAME"]
 
-        # Build search request
-        search_query = p_query if p_query else f"{p_section} {company}"
-        filters = {"@and": [
-            {"@eq": {"TICKER": ticker}},
-            {"@eq": {"FORM_TYPE": p_form_type}},
-            {"@eq": {"SECTION_NAME": p_section}}
-        ]}
+        # Build search request with optional filters
+        search_query = p_query if p_query else f"{p_section or 'filing'} {company}"
+
+        # Build filter - only include non-NULL filter conditions
+        filter_parts = [{"@eq": {"TICKER": ticker}}]
+        if p_form_type:
+            filter_parts.append({"@eq": {"FORM_TYPE": p_form_type}})
+        if p_section:
+            filter_parts.append({"@eq": {"SECTION_NAME": p_section}})
+
+        filters = {"@and": filter_parts} if len(filter_parts) > 1 else filter_parts[0]
 
         request = {"query": search_query, "columns": search_columns, "limit": 5, "filter": filters}
         request_json = json.dumps(request)
@@ -131,8 +140,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 "company": company,
                 "chunk_text": f"ERROR: {str(e)[:200]}",
                 "filed_at": "",
-                "section": p_section,
-                "form_type": p_form_type
+                "section": p_section or "",
+                "form_type": p_form_type or ""
             })
 
     if not all_results:
@@ -163,7 +172,8 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
         if p_output_mode == 'summarized':
             for ticker, data in by_company.items():
                 context = "\n\n".join(data["chunks"][:3])
-                prompt = f"Summarize the key points from these {p_section} excerpts from {data['company']} ({ticker}) SEC filings. Be concise (3-5 bullet points):\n\n{context}"
+                section_label = p_section or "filing"
+                prompt = f"Summarize the key points from these {section_label} excerpts from {data['company']} ({ticker}) SEC filings. Be concise (3-5 bullet points):\n\n{context}"
                 prompt_escaped = prompt.replace("'", "''")
                 try:
                     resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.3-70b', '{prompt_escaped}') AS r").collect()
@@ -182,14 +192,15 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 """).collect()
 
         elif p_output_mode == 'compared':
-            # Build comparison context from all companies
+            # Build comparison context from all companies (top 10 by chunk count)
             comparison_parts = []
             for ticker, data in list(by_company.items())[:10]:
                 excerpt = data["chunks"][0][:1500] if data["chunks"] else ""
                 comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
 
             context = "\n\n---\n\n".join(comparison_parts)
-            prompt = f"Compare the {p_section} across these companies. Identify 3-5 common themes and note how each company addresses them. Format as a markdown table with themes as rows and companies as columns:\n\n{context}"
+            section_label = p_section or "filings"
+            prompt = f"Compare the {section_label} across these companies. Identify 3-5 common themes and note how each company addresses them. Format as a markdown table with themes as rows and companies as columns:\n\n{context}"
             prompt_escaped = prompt.replace("'", "''")
             try:
                 resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.3-70b', '{prompt_escaped}') AS r").collect()
@@ -201,7 +212,7 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 INSERT INTO {fqn}.EXPLORER_RESULTS
                     (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS, RUN_TIMESTAMP)
                 VALUES ('{run_id}', '{esc(p_sector)}', 'custom_comparison',
-                        'Cross-company {esc(p_section)} comparison',
+                        'Cross-company {esc(section_label)} comparison',
                         '{esc(comparison)}',
                         '{esc(query_params)}',
                         CURRENT_TIMESTAMP())
