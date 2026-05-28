@@ -40,7 +40,9 @@ CREATE OR REPLACE PROCEDURE EXPLORER_CUSTOM_ANALYSIS(
     P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
     P_LIMIT INT DEFAULT NULL,
     P_MODEL VARCHAR DEFAULT 'llama3.3-70b',
-    P_RUN_NAME VARCHAR DEFAULT NULL
+    P_RUN_NAME VARCHAR DEFAULT NULL,
+    P_DATE_START VARCHAR DEFAULT NULL,
+    P_DATE_END VARCHAR DEFAULT NULL
 )
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -52,7 +54,7 @@ AS $$
 import json
 from datetime import datetime
 
-def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit, p_model, p_run_name):
+def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit, p_model, p_run_name, p_date_start, p_date_end):
     db = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
     schema = session.sql("SELECT CURRENT_SCHEMA()").collect()[0][0]
     fqn = f"{db}.{schema}"
@@ -68,15 +70,6 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
     search_fqn = f"{db}.{schema}.{search_svc}"
 
     run_id = f"custom-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    query_params = json.dumps({
-        "sector": p_sector,
-        "query": p_query,
-        "section": p_section,
-        "form_type": p_form_type,
-        "output_mode": p_output_mode,
-        "limit": p_limit,
-        "model": p_model
-    })
 
     # Get companies in sector, ordered by filing count (most active first)
     limit_clause = f"LIMIT {p_limit}" if p_limit else ""
@@ -150,6 +143,44 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
 
     if not all_results:
         return f"No results found for sector {p_sector} with given filters."
+
+    # Date range filtering (if provided)
+    if p_date_start or p_date_end:
+        filtered = []
+        for r in all_results:
+            filed = r.get("filed_at", "")
+            if not filed:
+                continue
+            # filed_at may be "YYYY-MM-DD HH:MM:SS..." — compare first 10 chars
+            filed_date = str(filed)[:10]
+            if p_date_start and filed_date < p_date_start:
+                continue
+            if p_date_end and filed_date > p_date_end:
+                continue
+            filtered.append(r)
+        all_results = filtered
+
+    if not all_results:
+        return f"No results found for sector {p_sector} within date range {p_date_start} to {p_date_end}."
+
+    # Compute stats
+    companies_searched = len(tickers_df)
+    companies_with_results = len(set(r["ticker"] for r in all_results))
+
+    # Rebuild query_params with stats
+    query_params = json.dumps({
+        "sector": p_sector,
+        "query": p_query,
+        "section": p_section,
+        "form_type": p_form_type,
+        "output_mode": p_output_mode,
+        "limit": p_limit,
+        "model": p_model,
+        "date_start": p_date_start,
+        "date_end": p_date_end,
+        "companies_searched": companies_searched,
+        "companies_with_results": companies_with_results
+    })
 
     # Batch-lookup EDGAR filing URLs from FILING_INDEX
     unique_accessions = list(set(r["accession_no"] for r in all_results if r.get("accession_no")))
@@ -232,9 +263,10 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 """).collect()
 
         elif p_output_mode == 'compared':
-            # Build comparison context from all companies (top 10 by chunk count)
+            # Build comparison context from all companies
+            compare_limit = p_limit if p_limit else 10
             comparison_parts = []
-            for ticker, data in list(by_company.items())[:10]:
+            for ticker, data in list(by_company.items())[:compare_limit]:
                 excerpt = data["chunks"][0][:1500] if data["chunks"] else ""
                 comparison_parts.append(f"[{data['company']} ({ticker})]:\n{excerpt}")
 
@@ -250,7 +282,7 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
 
             # Append source filing links per company
             source_section = "\n\n**Sources:**"
-            for ticker, data in list(by_company.items())[:10]:
+            for ticker, data in list(by_company.items())[:compare_limit]:
                 sources = data.get("sources", [])
                 seen = set()
                 links = []

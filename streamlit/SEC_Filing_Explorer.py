@@ -1602,7 +1602,8 @@ def render_research_explorer():
                 st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
 
                 # Run name input
-                run_name = st.text_input("Run Name", value=f"{selected_sector} - {section_str or 'All Sections'} ({sector_output})", key="dialog_run_name",
+                run_name = st.text_input("Run Name", value=f"{selected_sector} - {section_str or 'All Sections'} ({sector_output})",
+                                         key="dialog_run_name", max_chars=200,
                                          help="Give this run a descriptive name for easy identification later.")
 
                 # Build params (cheap, no SQL)
@@ -1650,9 +1651,11 @@ def render_research_explorer():
                     st.session_state["re_executing"] = True
                     with st.spinner("Triggering async analysis..."):
                         try:
+                            date_start_param = f"'{date_start}'" if date_start else "NULL"
+                            date_end_param = f"'{date_end}'" if date_end else "NULL"
                             result = session.sql(f"""
                                 CALL TRIGGER_SECTOR_ANALYSIS(
-                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}', {run_name_param}
+                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}', {run_name_param}, {date_start_param}, {date_end_param}
                                 )
                             """).collect()
                             if result:
@@ -1743,6 +1746,16 @@ def render_research_explorer():
                                     f"Model: `{params.get('model', 'N/A')}`",
                                     f"Limit: `{params.get('limit') or 'all'}`",
                                 ]
+                                # Date range (if present)
+                                ds = params.get('date_start')
+                                de = params.get('date_end')
+                                if ds or de:
+                                    param_parts.append(f"Dates: `{ds or '...'} to {de or '...'}`")
+                                # Stats (if present)
+                                cs = params.get('companies_searched')
+                                cw = params.get('companies_with_results')
+                                if cs is not None:
+                                    param_parts.append(f"Companies: `{cw}/{cs} with results`")
                                 st.markdown(f"**Search Parameters:** {' | '.join(param_parts)}")
                             except Exception:
                                 pass

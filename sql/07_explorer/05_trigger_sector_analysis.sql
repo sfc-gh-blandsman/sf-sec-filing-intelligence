@@ -35,7 +35,9 @@ CREATE OR REPLACE PROCEDURE TRIGGER_SECTOR_ANALYSIS(
     P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
     P_LIMIT INT DEFAULT NULL,
     P_MODEL VARCHAR DEFAULT 'llama3.3-70b',
-    P_RUN_NAME VARCHAR DEFAULT NULL
+    P_RUN_NAME VARCHAR DEFAULT NULL,
+    P_DATE_START VARCHAR DEFAULT NULL,
+    P_DATE_END VARCHAR DEFAULT NULL
 )
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -52,6 +54,8 @@ DECLARE
     limit_arg VARCHAR;
     model_arg VARCHAR;
     run_name_arg VARCHAR;
+    date_start_arg VARCHAR;
+    date_end_arg VARCHAR;
 BEGIN
     -- Generate unique task name
     task_name := 'EXPLORER_RUN_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
@@ -63,11 +67,14 @@ BEGIN
     limit_arg := CASE WHEN :P_LIMIT IS NOT NULL THEN :P_LIMIT::VARCHAR ELSE 'NULL' END;
     model_arg := '''' || :P_MODEL || '''';
     run_name_arg := CASE WHEN :P_RUN_NAME IS NOT NULL THEN '''' || REPLACE(:P_RUN_NAME, '''', '''''') || '''' ELSE 'NULL' END;
+    date_start_arg := CASE WHEN :P_DATE_START IS NOT NULL THEN '''' || :P_DATE_START || '''' ELSE 'NULL' END;
+    date_end_arg := CASE WHEN :P_DATE_END IS NOT NULL THEN '''' || :P_DATE_END || '''' ELSE 'NULL' END;
 
     -- Build the CALL statement
     sp_call := 'CALL EXPLORER_CUSTOM_ANALYSIS(''' || :P_SECTOR || ''', ' ||
                :query_arg || ', ' || :section_arg || ', ' || :form_arg || ', ''' ||
-               :P_OUTPUT_MODE || ''', ' || :limit_arg || ', ' || :model_arg || ', ' || :run_name_arg || ')';
+               :P_OUTPUT_MODE || ''', ' || :limit_arg || ', ' || :model_arg || ', ' || :run_name_arg || ', ' ||
+               :date_start_arg || ', ' || :date_end_arg || ')';
 
     -- Create the task
     task_ddl := 'CREATE OR REPLACE TASK ' || :task_name ||
