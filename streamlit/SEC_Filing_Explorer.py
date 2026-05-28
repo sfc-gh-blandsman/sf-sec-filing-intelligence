@@ -1527,11 +1527,22 @@ def render_research_explorer():
                 selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
                 if selected_run:
                     run_rows = session.sql(f"""
-                        SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE
+                        SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS
                         FROM EXPLORER_RESULTS
                         WHERE RUN_ID = '{selected_run}'
                         ORDER BY RUN_TIMESTAMP
                     """).collect()
+
+                    # Show search parameters header
+                    if run_rows and run_rows[0]["QUERY_PARAMS"]:
+                        try:
+                            params = json.loads(run_rows[0]["QUERY_PARAMS"])
+                            st.markdown(f"**Search Parameters:** Sector: `{params.get('sector', 'N/A')}` | Query: `{params.get('query', 'None')}` | Section: `{params.get('section', 'N/A')}` | Form: `{params.get('form_type', 'N/A')}` | Mode: `{params.get('output_mode', 'N/A')}`")
+                        except Exception:
+                            pass
+                    st.caption(f"{len(run_rows)} result(s)")
+                    st.divider()
+
                     for row in run_rows:
                         qtype = row["QUERY_TYPE"]
                         if qtype == "custom_comparison":
