@@ -1533,63 +1533,57 @@ def render_research_explorer():
     limit_val = company_limit if company_limit > 0 else None
 
     if st.button("Run for Entire Sector", key="re_sector_btn"):
-        # Run timing probe and show confirmation dialog
-        st.session_state["re_probe_params"] = {
-            "sector": selected_sector,
-            "query_param": f"'{search_query}'" if search_query else "NULL",
-            "section_param": f"'{section_str}'" if section_str else "NULL",
-            "form_param": f"'{form_str}'" if form_str else "NULL",
-            "sector_output": sector_output,
-            "limit_param": str(limit_val) if limit_val else "NULL",
-            "total_companies": limit_val if limit_val else cnt
-        }
-        # Run probe
-        try:
+        @st.dialog("Run for Entire Sector")
+        def show_sector_confirm():
+            st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
+            st.write("Calculating estimated runtime...")
+
+            # Build params
+            query_param = f"'{search_query}'" if search_query else "NULL"
+            section_param = f"'{section_str}'" if section_str else "NULL"
+            form_param = f"'{form_str}'" if form_str else "NULL"
+            limit_param_str = str(limit_val) if limit_val else "NULL"
+            total_companies = limit_val if limit_val else cnt
+
+            # Run timing probe (1 company)
             t0 = time.time()
-            params = st.session_state["re_probe_params"]
-            session.sql(f"""
-                CALL EXPLORER_CUSTOM_ANALYSIS(
-                    '{params["sector"]}', {params["query_param"]}, {params["section_param"]}, {params["form_param"]}, '{params["sector_output"]}', 1
-                )
-            """).collect()
-            probe_sec = time.time() - t0
-            st.session_state["re_probe_sec"] = probe_sec
-            st.session_state["re_show_confirm"] = True
-            st.rerun()
-        except Exception as e:
-            st.error(f"Probe failed: {str(e)[:200]}")
+            try:
+                session.sql(f"""
+                    CALL EXPLORER_CUSTOM_ANALYSIS(
+                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1
+                    )
+                """).collect()
+                probe_sec = time.time() - t0
+            except Exception as e:
+                st.error(f"Probe failed: {str(e)[:200]}")
+                return
 
-    # Confirmation section (appears after probe completes)
-    if st.session_state.get("re_show_confirm"):
-        params = st.session_state.get("re_probe_params", {})
-        probe_sec = st.session_state.get("re_probe_sec", 0)
-        total_companies = params.get("total_companies", 0)
-        est_seconds = probe_sec * total_companies
-        if est_seconds < 120:
-            est_str = f"{est_seconds:.0f} seconds"
-        else:
-            est_str = f"{est_seconds / 60:.0f} minutes"
+            # Show estimate
+            est_seconds = probe_sec * total_companies
+            if est_seconds < 120:
+                est_str = f"{est_seconds:.0f} seconds"
+            else:
+                est_str = f"{est_seconds / 60:.0f} minutes"
 
-        st.warning(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company with current filters)")
+            st.warning(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
 
-        col_confirm, col_cancel = st.columns(2)
-        if col_confirm.button("Confirm & Execute", type="primary", key="re_confirm_exec"):
-            with st.spinner(f"Triggering async analysis for {params['sector']} sector..."):
-                try:
-                    result = session.sql(f"""
-                        CALL TRIGGER_SECTOR_ANALYSIS(
-                            '{params["sector"]}', {params["query_param"]}, {params["section_param"]}, {params["form_param"]}, '{params["sector_output"]}', {params["limit_param"]}
-                        )
-                    """).collect()
-                    if result:
-                        st.success(result[0][0])
-                except Exception as e:
-                    st.error(f"Failed: {str(e)[:200]}. Deploy `sql/07_explorer/05_trigger_sector_analysis.sql` first.")
-            st.session_state["re_show_confirm"] = False
+            # Confirm button
+            if st.button("Confirm & Execute", type="primary", key="dialog_confirm"):
+                with st.spinner("Triggering async analysis..."):
+                    try:
+                        result = session.sql(f"""
+                            CALL TRIGGER_SECTOR_ANALYSIS(
+                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}
+                            )
+                        """).collect()
+                        if result:
+                            st.success(result[0][0])
+                    except Exception as e:
+                        st.error(f"Failed: {str(e)[:200]}")
+                time.sleep(2)
+                st.rerun()
 
-        if col_cancel.button("Cancel", key="re_cancel"):
-            st.session_state["re_show_confirm"] = False
-            st.rerun()
+        show_sector_confirm()
 
     # View full-sector runs
     with st.expander("View Full-Sector Runs"):
