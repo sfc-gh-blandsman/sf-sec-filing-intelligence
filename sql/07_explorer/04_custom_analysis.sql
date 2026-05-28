@@ -38,7 +38,8 @@ CREATE OR REPLACE PROCEDURE EXPLORER_CUSTOM_ANALYSIS(
     P_SECTION VARCHAR DEFAULT NULL,
     P_FORM_TYPE VARCHAR DEFAULT NULL,
     P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
-    P_LIMIT INT DEFAULT NULL
+    P_LIMIT INT DEFAULT NULL,
+    P_MODEL VARCHAR DEFAULT 'llama3.3-70b'
 )
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -50,7 +51,7 @@ AS $$
 import json
 from datetime import datetime
 
-def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit):
+def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_output_mode, p_limit, p_model):
     db = session.sql("SELECT CURRENT_DATABASE()").collect()[0][0]
     schema = session.sql("SELECT CURRENT_SCHEMA()").collect()[0][0]
     fqn = f"{db}.{schema}"
@@ -176,7 +177,7 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
                 prompt = f"Summarize the key points from these {section_label} excerpts from {data['company']} ({ticker}) SEC filings. Be concise (3-5 bullet points):\n\n{context}"
                 prompt_escaped = prompt.replace("'", "''")
                 try:
-                    resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.3-70b', '{prompt_escaped}') AS r").collect()
+                    resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{p_model}', '{prompt_escaped}') AS r").collect()
                     summary = resp[0]["R"] if resp else "No summary generated"
                 except Exception as e:
                     summary = f"ERROR: {str(e)[:200]}"
@@ -203,7 +204,7 @@ def run_custom_analysis(session, p_sector, p_query, p_section, p_form_type, p_ou
             prompt = f"Compare the {section_label} across these companies. Identify 3-5 common themes and note how each company addresses them. Format as a markdown table with themes as rows and companies as columns:\n\n{context}"
             prompt_escaped = prompt.replace("'", "''")
             try:
-                resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.3-70b', '{prompt_escaped}') AS r").collect()
+                resp = session.sql(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{p_model}', '{prompt_escaped}') AS r").collect()
                 comparison = resp[0]["R"] if resp else "No comparison generated"
             except Exception as e:
                 comparison = f"ERROR: {str(e)[:200]}"

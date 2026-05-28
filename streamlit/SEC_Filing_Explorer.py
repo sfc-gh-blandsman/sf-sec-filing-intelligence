@@ -1315,6 +1315,16 @@ SECTION_OPTIONS = [
     "Results of Operations", "Other Events", "Director/Officer Changes"
 ]
 
+RESEARCH_MODELS = [
+    "claude-4-sonnet",
+    "claude-opus-4-7",
+    "openai-gpt-4.1",
+    "llama4-maverick",
+    "llama3.3-70b",
+    "mistral-large2",
+    "gemini-3.1-pro",
+]
+
 
 def render_research_explorer():
     st.header("Research Explorer")
@@ -1348,6 +1358,8 @@ def render_research_explorer():
 
     output_mode = st.radio("Output Mode", ["Excerpts", "Summarized", "Compared"], horizontal=True, key="re_mode",
                            help="Excerpts: raw text, no LLM. Summarized: per-company LLM summary. Compared: cross-company theme grid.")
+    research_model = st.selectbox("LLM Model (for Summarized/Compared modes)", RESEARCH_MODELS, index=4, key="re_llm_model",
+                                  help="Model used for synthesis in Summarized and Compared modes. Not used in Excerpts mode.")
 
     st.divider()
 
@@ -1462,7 +1474,7 @@ def render_research_explorer():
                 context = "\n\n".join(data["excerpts"][:5])
                 prompt = f"Summarize the key points from these SEC filing excerpts for {data['company']} ({ticker}). Be concise (3-5 bullet points):\n\n{context}"
                 with st.spinner(f"Summarizing {ticker}..."):
-                    summary = cortex_complete("llama3.3-70b", prompt)
+                    summary = cortex_complete(research_model, prompt)
                 st.markdown(f"### {data['company']} ({ticker})")
                 st.markdown(summary)
                 with st.expander(f"Source excerpts ({len(data['excerpts'])})"):
@@ -1490,7 +1502,7 @@ def render_research_explorer():
             prompt = f"Compare the {sections_str} sections across these companies. Identify 3-5 common themes and note how each company addresses them. Present as a markdown table with themes as rows and companies as columns:\n\n{context}"
 
             with st.spinner("Generating comparison..."):
-                comparison = cortex_complete("llama3.3-70b", prompt)
+                comparison = cortex_complete(research_model, prompt)
             st.markdown(comparison)
 
     # -------------------------------------------------------------------------
@@ -1510,7 +1522,7 @@ def render_research_explorer():
                                         help="Limit how many companies to process. 0 means all companies in the sector.")
 
     # Show company count for selected sector (pre-fetched, no per-switch SQL)
-    @st.cache_data(ttl=60)
+    @st.cache_data(ttl=300)
     def get_all_sector_counts():
         return session.sql("""
             SELECT INDUSTRY_SECTOR, COUNT(DISTINCT TICKER) AS cnt
@@ -1536,27 +1548,27 @@ def render_research_explorer():
         @st.dialog("Run for Entire Sector")
         def show_sector_confirm():
             st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
-            st.write("Calculating estimated runtime...")
+            st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
+            with st.spinner("Calculating estimated runtime (probing 1 company)..."):
+                # Build params
+                query_param = f"'{search_query}'" if search_query else "NULL"
+                section_param = f"'{section_str}'" if section_str else "NULL"
+                form_param = f"'{form_str}'" if form_str else "NULL"
+                limit_param_str = str(limit_val) if limit_val else "NULL"
+                total_companies = limit_val if limit_val else cnt
 
-            # Build params
-            query_param = f"'{search_query}'" if search_query else "NULL"
-            section_param = f"'{section_str}'" if section_str else "NULL"
-            form_param = f"'{form_str}'" if form_str else "NULL"
-            limit_param_str = str(limit_val) if limit_val else "NULL"
-            total_companies = limit_val if limit_val else cnt
-
-            # Run timing probe (1 company)
-            t0 = time.time()
-            try:
-                session.sql(f"""
-                    CALL EXPLORER_CUSTOM_ANALYSIS(
-                        '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1
-                    )
-                """).collect()
-                probe_sec = time.time() - t0
-            except Exception as e:
-                st.error(f"Probe failed: {str(e)[:200]}")
-                return
+                # Run timing probe (1 company)
+                t0 = time.time()
+                try:
+                    session.sql(f"""
+                        CALL EXPLORER_CUSTOM_ANALYSIS(
+                            '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
+                        )
+                    """).collect()
+                    probe_sec = time.time() - t0
+                except Exception as e:
+                    st.error(f"Probe failed: {str(e)[:200]}")
+                    return
 
             # Show estimate
             est_seconds = probe_sec * total_companies
@@ -1565,21 +1577,24 @@ def render_research_explorer():
             else:
                 est_str = f"{est_seconds / 60:.0f} minutes"
 
-            st.warning(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
+            st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
 
             # Confirm button
-            if st.button("Confirm & Execute", type="primary", key="dialog_confirm"):
+            if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
+                         disabled=st.session_state.get("re_executing", False)):
+                st.session_state["re_executing"] = True
                 with st.spinner("Triggering async analysis..."):
                     try:
                         result = session.sql(f"""
                             CALL TRIGGER_SECTOR_ANALYSIS(
-                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}
+                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
                             )
                         """).collect()
                         if result:
                             st.success(result[0][0])
                     except Exception as e:
                         st.error(f"Failed: {str(e)[:200]}")
+                st.session_state["re_executing"] = False
                 time.sleep(2)
                 st.rerun()
 

@@ -33,7 +33,8 @@ CREATE OR REPLACE PROCEDURE TRIGGER_SECTOR_ANALYSIS(
     P_SECTION VARCHAR DEFAULT NULL,
     P_FORM_TYPE VARCHAR DEFAULT NULL,
     P_OUTPUT_MODE VARCHAR DEFAULT 'excerpts',
-    P_LIMIT INT DEFAULT NULL
+    P_LIMIT INT DEFAULT NULL,
+    P_MODEL VARCHAR DEFAULT 'llama3.3-70b'
 )
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -48,6 +49,7 @@ DECLARE
     section_arg VARCHAR;
     form_arg VARCHAR;
     limit_arg VARCHAR;
+    model_arg VARCHAR;
 BEGIN
     -- Generate unique task name
     task_name := 'EXPLORER_RUN_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
@@ -57,11 +59,12 @@ BEGIN
     section_arg := CASE WHEN :P_SECTION IS NOT NULL THEN '''' || :P_SECTION || '''' ELSE 'NULL' END;
     form_arg := CASE WHEN :P_FORM_TYPE IS NOT NULL THEN '''' || :P_FORM_TYPE || '''' ELSE 'NULL' END;
     limit_arg := CASE WHEN :P_LIMIT IS NOT NULL THEN :P_LIMIT::VARCHAR ELSE 'NULL' END;
+    model_arg := '''' || :P_MODEL || '''';
 
     -- Build the CALL statement
     sp_call := 'CALL EXPLORER_CUSTOM_ANALYSIS(''' || :P_SECTOR || ''', ' ||
                :query_arg || ', ' || :section_arg || ', ' || :form_arg || ', ''' ||
-               :P_OUTPUT_MODE || ''', ' || :limit_arg || ')';
+               :P_OUTPUT_MODE || ''', ' || :limit_arg || ', ' || :model_arg || ')';
 
     -- Create the task
     task_ddl := 'CREATE OR REPLACE TASK ' || :task_name ||
