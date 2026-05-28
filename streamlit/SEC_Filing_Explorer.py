@@ -1509,13 +1509,19 @@ def render_research_explorer():
         company_limit = st.number_input("Company Limit (0 = all)", min_value=0, value=0, key="re_limit",
                                         help="Limit how many companies to process. 0 means all companies in the sector.")
 
-    # Show company count for selected sector
-    @st.cache_data(ttl=30)
-    def get_sector_count(sector):
-        return session.sql(f"SELECT COUNT(DISTINCT TICKER) AS cnt FROM FILING_INDEX WHERE INDUSTRY_SECTOR = '{sector}' AND TICKER IS NOT NULL").collect()[0]["CNT"]
+    # Show company count for selected sector (pre-fetched, no per-switch SQL)
+    @st.cache_data(ttl=60)
+    def get_all_sector_counts():
+        return session.sql("""
+            SELECT INDUSTRY_SECTOR, COUNT(DISTINCT TICKER) AS cnt
+            FROM FILING_INDEX WHERE TICKER IS NOT NULL
+            GROUP BY 1
+        """).to_pandas()
 
     try:
-        cnt = get_sector_count(selected_sector)
+        sector_counts = get_all_sector_counts()
+        match = sector_counts[sector_counts["INDUSTRY_SECTOR"] == selected_sector]
+        cnt = int(match["CNT"].iloc[0]) if not match.empty else 0
         st.caption(f"{cnt} companies with tickers in {selected_sector} sector")
     except Exception:
         cnt = 0
@@ -1525,23 +1531,6 @@ def render_research_explorer():
     section_str = sections[0] if sections else None
     form_str = form_types[0] if form_types else None
     limit_val = company_limit if company_limit > 0 else None
-
-    # Show running explorer tasks
-    @st.cache_data(ttl=15)
-    def get_running_explorer_tasks():
-        return session.sql("""
-            SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
-                SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
-                RESULT_LIMIT => 20
-            )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
-        """).collect()
-
-    try:
-        running = get_running_explorer_tasks()
-        if running:
-            st.info(f"{len(running)} sector analysis task(s) currently running: {', '.join(r['NAME'] for r in running)}")
-    except Exception:
-        pass
 
     if st.button("Run for Entire Sector", key="re_sector_btn"):
         # Run timing probe and show confirmation dialog
@@ -1604,6 +1593,19 @@ def render_research_explorer():
 
     # View full-sector runs
     with st.expander("View Full-Sector Runs"):
+        # Show running tasks (only when expander is open)
+        try:
+            running = session.sql("""
+                SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                    SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
+                    RESULT_LIMIT => 20
+                )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
+            """).collect()
+            if running:
+                st.info(f"{len(running)} task(s) running: {', '.join(r['NAME'] for r in running)}")
+        except Exception:
+            pass
+
         if st.button("Refresh", key="re_refresh"):
             st.cache_data.clear()
         try:
