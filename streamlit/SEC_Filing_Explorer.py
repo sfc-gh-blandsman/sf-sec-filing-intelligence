@@ -1549,91 +1549,117 @@ def render_research_explorer():
         def show_sector_confirm():
             st.write(f"**Sector:** {selected_sector} ({cnt} companies)")
             st.write(f"**Model:** {research_model} | **Mode:** {sector_output}")
-            with st.spinner("Calculating estimated runtime (probing 1 company)..."):
-                # Build params
-                query_param = f"'{search_query}'" if search_query else "NULL"
-                section_param = f"'{section_str}'" if section_str else "NULL"
-                form_param = f"'{form_str}'" if form_str else "NULL"
-                limit_param_str = str(limit_val) if limit_val else "NULL"
-                total_companies = limit_val if limit_val else cnt
 
-                # Run timing probe (1 company)
-                t0 = time.time()
-                try:
-                    session.sql(f"""
-                        CALL EXPLORER_CUSTOM_ANALYSIS(
-                            '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
-                        )
-                    """).collect()
-                    probe_sec = time.time() - t0
-                except Exception as e:
-                    st.error(f"Probe failed: {str(e)[:200]}")
-                    return
+            # Build params (cheap, no SQL)
+            query_param = f"'{search_query}'" if search_query else "NULL"
+            section_param = f"'{section_str}'" if section_str else "NULL"
+            form_param = f"'{form_str}'" if form_str else "NULL"
+            limit_param_str = str(limit_val) if limit_val else "NULL"
+            total_companies = limit_val if limit_val else cnt
 
-            # Show estimate
-            est_seconds = probe_sec * total_companies
-            if est_seconds < 120:
-                est_str = f"{est_seconds:.0f} seconds"
+            # Two-phase: first show dialog instantly, then user triggers estimate
+            if "re_probe_done" not in st.session_state:
+                st.session_state["re_probe_done"] = False
+                st.session_state["re_probe_sec"] = None
+
+            if not st.session_state["re_probe_done"]:
+                st.caption(f"Will process {total_companies} companies. Click below to estimate runtime.")
+                if st.button("Calculate Estimate", key="dialog_estimate"):
+                    with st.spinner("Probing 1 company for timing..."):
+                        t0 = time.time()
+                        try:
+                            session.sql(f"""
+                                CALL EXPLORER_CUSTOM_ANALYSIS(
+                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', 1, '{research_model}'
+                                )
+                            """).collect()
+                            st.session_state["re_probe_sec"] = time.time() - t0
+                            st.session_state["re_probe_done"] = True
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Probe failed: {str(e)[:200]}")
             else:
-                est_str = f"{est_seconds / 60:.0f} minutes"
+                probe_sec = st.session_state["re_probe_sec"]
+                est_seconds = probe_sec * total_companies
+                if est_seconds < 120:
+                    est_str = f"{est_seconds:.0f} seconds"
+                else:
+                    est_str = f"{est_seconds / 60:.0f} minutes"
 
-            st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
+                st.success(f"**Estimated runtime:** ~{est_str} for {total_companies} companies ({probe_sec:.1f}s per company)")
 
-            # Confirm button
-            if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
-                         disabled=st.session_state.get("re_executing", False)):
-                st.session_state["re_executing"] = True
-                with st.spinner("Triggering async analysis..."):
-                    try:
-                        result = session.sql(f"""
-                            CALL TRIGGER_SECTOR_ANALYSIS(
-                                '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
-                            )
-                        """).collect()
-                        if result:
-                            st.success(result[0][0])
-                    except Exception as e:
-                        st.error(f"Failed: {str(e)[:200]}")
-                st.session_state["re_executing"] = False
-                time.sleep(2)
-                st.rerun()
+                # Confirm button — disabled after click
+                if st.button("Confirm & Execute", type="primary", key="dialog_confirm",
+                             disabled=st.session_state.get("re_executing", False)):
+                    st.session_state["re_executing"] = True
+                    with st.spinner("Triggering async analysis..."):
+                        try:
+                            result = session.sql(f"""
+                                CALL TRIGGER_SECTOR_ANALYSIS(
+                                    '{selected_sector}', {query_param}, {section_param}, {form_param}, '{sector_output}', {limit_param_str}, '{research_model}'
+                                )
+                            """).collect()
+                            if result:
+                                st.success(result[0][0])
+                        except Exception as e:
+                            st.error(f"Failed: {str(e)[:200]}")
+                    # Clean up state
+                    st.session_state["re_executing"] = False
+                    st.session_state["re_probe_done"] = False
+                    st.session_state["re_probe_sec"] = None
+                    time.sleep(2)
+                    st.rerun()
 
         show_sector_confirm()
 
     # View full-sector runs
     with st.expander("View Full-Sector Runs"):
-        # Show running tasks (only when expander is open)
-        try:
-            running = session.sql("""
+        if st.button("Refresh", key="re_refresh"):
+            st.cache_data.clear()
+
+        # Cached: running tasks
+        @st.cache_data(ttl=30)
+        def get_running_explorer_tasks():
+            return session.sql("""
                 SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
                     SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
                     RESULT_LIMIT => 20
                 )) WHERE NAME LIKE 'EXPLORER_RUN_%' AND STATE = 'EXECUTING'
             """).collect()
+
+        try:
+            running = get_running_explorer_tasks()
             if running:
                 st.info(f"{len(running)} task(s) running: {', '.join(r['NAME'] for r in running)}")
         except Exception:
             pass
 
-        if st.button("Refresh", key="re_refresh"):
-            st.cache_data.clear()
-        try:
-            runs = session.sql("""
+        # Cached: previous runs list
+        @st.cache_data(ttl=60)
+        def get_explorer_runs():
+            return session.sql("""
                 SELECT RUN_ID, MAX(SECTOR) AS SECTOR, MAX(QUERY_TYPE) AS QUERY_TYPE, MAX(RUN_TIMESTAMP) AS LAST_RUN
                 FROM EXPLORER_RESULTS
                 GROUP BY RUN_ID
                 ORDER BY LAST_RUN DESC
                 LIMIT 20
             """).to_pandas()
+
+        try:
+            runs = get_explorer_runs()
             if not runs.empty:
                 selected_run = st.selectbox("Select a run to view:", runs["RUN_ID"].tolist(), key="re_prev_run")
                 if selected_run:
-                    run_rows = session.sql(f"""
-                        SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS
-                        FROM EXPLORER_RESULTS
-                        WHERE RUN_ID = '{selected_run}'
-                        ORDER BY RUN_TIMESTAMP
-                    """).collect()
+                    @st.cache_data(ttl=60)
+                    def get_run_results(run_id):
+                        return session.sql(f"""
+                            SELECT QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE, QUERY_PARAMS
+                            FROM EXPLORER_RESULTS
+                            WHERE RUN_ID = '{run_id}'
+                            ORDER BY RUN_TIMESTAMP
+                        """).collect()
+
+                    run_rows = get_run_results(selected_run)
 
                     # Show search parameters header
                     if run_rows and run_rows[0]["QUERY_PARAMS"]:
