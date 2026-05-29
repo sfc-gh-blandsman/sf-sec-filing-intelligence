@@ -62,18 +62,19 @@ BEGIN
     INSERT INTO FILING_SIGNALS
         (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
          SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
-         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE, EXTRACTION_MODEL, IS_AMENDMENT)
+         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
+         EXTRACTION_MODEL, IS_AMENDMENT, EXTRACTION_METHOD, SIGNAL_EXTRACTED_AT)
     WITH source AS (
-        SELECT fc.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
-               fi.FILED_AT, fi.PERIOD_OF_REPORT, fi.IS_AMENDMENT,
-               LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000) AS excerpt
-        FROM FILING_CONTENT fc
-        JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
-        WHERE fc.SIGNAL_STATUS = 'PENDING' AND fc.CONTENT_TEXT IS NOT NULL AND fi.FORM_TYPE = '10-K'
+        SELECT v.ACCESSION_NO, v.COMPANY_NAME, v.TICKER, v.FORM_TYPE,
+               v.FILED_AT, v.PERIOD_OF_REPORT, v.IS_AMENDMENT,
+               v.INDUSTRY_SECTOR, v.INDUSTRY_TITLE, v.EXCERPT
+        FROM V_SIGNAL_EXCERPT v
+        JOIN FILING_CONTENT fc ON fc.ACCESSION_NO = v.ACCESSION_NO
+        WHERE fc.SIGNAL_STATUS = 'PENDING' AND v.FORM_TYPE = '10-K'
     ),
     extracted AS (
         SELECT s.*, SNOWFLAKE.CORTEX.AI_EXTRACT(
-            text => s.excerpt,
+            text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
                 'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
@@ -92,7 +93,8 @@ BEGIN
         NULLIF(e.ai_result:response:key_metrics::VARCHAR, 'None'),
         CASE WHEN e.ai_result:response:risk_flags::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:risk_flags::ARRAY END,
         CASE WHEN e.ai_result:response:material_items::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:material_items::ARRAY END,
-        NULL, NULL, 'arctic-extract', e.IS_AMENDMENT
+        e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, 'arctic-extract', e.IS_AMENDMENT,
+        'section_targeted', CURRENT_TIMESTAMP()
     FROM extracted e WHERE e.ai_result IS NOT NULL;
 
     UPDATE FILING_CONTENT fc SET SIGNAL_STATUS = 'EXTRACTED'
@@ -114,18 +116,19 @@ BEGIN
     INSERT INTO FILING_SIGNALS
         (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
          SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
-         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE, EXTRACTION_MODEL, IS_AMENDMENT)
+         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
+         EXTRACTION_MODEL, IS_AMENDMENT, EXTRACTION_METHOD, SIGNAL_EXTRACTED_AT)
     WITH source AS (
-        SELECT fc.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
-               fi.FILED_AT, fi.PERIOD_OF_REPORT, fi.IS_AMENDMENT,
-               LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000) AS excerpt
-        FROM FILING_CONTENT fc
-        JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
-        WHERE fc.SIGNAL_STATUS = 'PENDING' AND fc.CONTENT_TEXT IS NOT NULL AND fi.FORM_TYPE = '10-Q'
+        SELECT v.ACCESSION_NO, v.COMPANY_NAME, v.TICKER, v.FORM_TYPE,
+               v.FILED_AT, v.PERIOD_OF_REPORT, v.IS_AMENDMENT,
+               v.INDUSTRY_SECTOR, v.INDUSTRY_TITLE, v.EXCERPT
+        FROM V_SIGNAL_EXCERPT v
+        JOIN FILING_CONTENT fc ON fc.ACCESSION_NO = v.ACCESSION_NO
+        WHERE fc.SIGNAL_STATUS = 'PENDING' AND v.FORM_TYPE = '10-Q'
     ),
     extracted AS (
         SELECT s.*, SNOWFLAKE.CORTEX.AI_EXTRACT(
-            text => s.excerpt,
+            text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
                 'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
@@ -144,7 +147,8 @@ BEGIN
         NULLIF(e.ai_result:response:key_metrics::VARCHAR, 'None'),
         CASE WHEN e.ai_result:response:risk_flags::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:risk_flags::ARRAY END,
         CASE WHEN e.ai_result:response:material_items::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:material_items::ARRAY END,
-        NULL, NULL, 'arctic-extract', e.IS_AMENDMENT
+        e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, 'arctic-extract', e.IS_AMENDMENT,
+        'section_targeted', CURRENT_TIMESTAMP()
     FROM extracted e WHERE e.ai_result IS NOT NULL;
 
     UPDATE FILING_CONTENT fc SET SIGNAL_STATUS = 'EXTRACTED'
@@ -166,18 +170,19 @@ BEGIN
     INSERT INTO FILING_SIGNALS
         (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
          SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
-         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE, EXTRACTION_MODEL, IS_AMENDMENT)
+         KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
+         EXTRACTION_MODEL, IS_AMENDMENT, EXTRACTION_METHOD, SIGNAL_EXTRACTED_AT)
     WITH source AS (
-        SELECT fc.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
-               fi.FILED_AT, fi.PERIOD_OF_REPORT, fi.IS_AMENDMENT,
-               LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000) AS excerpt
-        FROM FILING_CONTENT fc
-        JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
-        WHERE fc.SIGNAL_STATUS = 'PENDING' AND fc.CONTENT_TEXT IS NOT NULL AND fi.FORM_TYPE NOT IN ('10-K', '10-Q')
+        SELECT v.ACCESSION_NO, v.COMPANY_NAME, v.TICKER, v.FORM_TYPE,
+               v.FILED_AT, v.PERIOD_OF_REPORT, v.IS_AMENDMENT,
+               v.INDUSTRY_SECTOR, v.INDUSTRY_TITLE, v.EXCERPT
+        FROM V_SIGNAL_EXCERPT v
+        JOIN FILING_CONTENT fc ON fc.ACCESSION_NO = v.ACCESSION_NO
+        WHERE fc.SIGNAL_STATUS = 'PENDING' AND v.FORM_TYPE NOT IN ('10-K', '10-Q')
     ),
     extracted AS (
         SELECT s.*, SNOWFLAKE.CORTEX.AI_EXTRACT(
-            text => s.excerpt,
+            text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
                 'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
@@ -196,7 +201,8 @@ BEGIN
         NULLIF(e.ai_result:response:key_metrics::VARCHAR, 'None'),
         CASE WHEN e.ai_result:response:risk_flags::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:risk_flags::ARRAY END,
         CASE WHEN e.ai_result:response:material_items::VARCHAR = 'None' THEN NULL ELSE e.ai_result:response:material_items::ARRAY END,
-        NULL, NULL, 'arctic-extract', e.IS_AMENDMENT
+        e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, 'arctic-extract', e.IS_AMENDMENT,
+        'raw_first_16k', CURRENT_TIMESTAMP()
     FROM extracted e WHERE e.ai_result IS NOT NULL;
 
     UPDATE FILING_CONTENT fc SET SIGNAL_STATUS = 'EXTRACTED'

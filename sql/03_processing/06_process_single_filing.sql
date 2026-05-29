@@ -255,57 +255,26 @@ BEGIN
         SELECT COUNT(*) FROM FILING_CHUNKS WHERE ACCESSION_NO IN (' || :v_acc_list || ')
     ' INTO :v_chunk_count;
 
-    -- Signal extraction with section-targeted excerpts for 10-K/10-Q
+    -- Signal extraction using shared V_SIGNAL_EXCERPT view
     EXECUTE IMMEDIATE '
         INSERT INTO FILING_SIGNALS
             (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
              SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
              KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
-             EXTRACTION_MODEL, IS_AMENDMENT)
-        WITH chunk_excerpts AS (
-            SELECT ck.ACCESSION_NO,
-                COALESCE(LEFT(LISTAGG(
-                    CASE WHEN ck.SECTION_NAME = ''Risk Factors'' THEN ck.CHUNK_TEXT END, '' ''
-                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
-                COALESCE(LEFT(LISTAGG(
-                    CASE WHEN ck.SECTION_NAME = ''MD&A'' THEN ck.CHUNK_TEXT END, '' ''
-                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 5000), '''') ||
-                COALESCE(LEFT(LISTAGG(
-                    CASE WHEN ck.SECTION_NAME = ''Financial Statements'' AND ck.CHUNK_INDEX <= 3 THEN ck.CHUNK_TEXT END, '' ''
-                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
-                COALESCE(LEFT(LISTAGG(
-                    CASE WHEN ck.SECTION_NAME = ''Business'' THEN ck.CHUNK_TEXT END, '' ''
-                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
-                COALESCE(LEFT(LISTAGG(
-                    CASE WHEN ck.SECTION_NAME = ''Market Risk'' THEN ck.CHUNK_TEXT END, '' ''
-                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 2000), '''')
-                AS targeted_excerpt
-            FROM FILING_CHUNKS ck
-            WHERE ck.ACCESSION_NO IN (' || :v_acc_list || ')
-            GROUP BY ck.ACCESSION_NO
-        ),
-        source AS (
-            SELECT fc.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
-                   fi.FILED_AT, fi.PERIOD_OF_REPORT, fi.IS_AMENDMENT,
-                   fi.INDUSTRY_SECTOR, fi.INDUSTRY_TITLE,
-                   CASE
-                       WHEN fi.FORM_TYPE IN (''10-K'',''10-Q'',''10-K/A'',''10-Q/A'',''10-KT'')
-                            AND ce.targeted_excerpt IS NOT NULL
-                            AND LENGTH(ce.targeted_excerpt) > 500
-                       THEN LEFT(ce.targeted_excerpt, 16000)
-                       ELSE LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000)
-                   END AS excerpt
-            FROM FILING_CONTENT fc
-            JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
-            LEFT JOIN chunk_excerpts ce ON ce.ACCESSION_NO = fc.ACCESSION_NO
+             EXTRACTION_MODEL, IS_AMENDMENT, EXTRACTION_METHOD, SIGNAL_EXTRACTED_AT)
+        WITH source AS (
+            SELECT v.ACCESSION_NO, v.COMPANY_NAME, v.TICKER, v.FORM_TYPE,
+                   v.FILED_AT, v.PERIOD_OF_REPORT, v.IS_AMENDMENT,
+                   v.INDUSTRY_SECTOR, v.INDUSTRY_TITLE, v.EXCERPT
+            FROM V_SIGNAL_EXCERPT v
+            JOIN FILING_CONTENT fc ON fc.ACCESSION_NO = v.ACCESSION_NO
             WHERE fc.ACCESSION_NO IN (' || :v_acc_list || ')
               AND fc.SIGNAL_STATUS = ''PENDING''
-              AND fc.CONTENT_TEXT IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM FILING_SIGNALS WHERE FILING_SIGNALS.ACCESSION_NO = fc.ACCESSION_NO)
         ),
         extracted AS (
             SELECT s.*, SNOWFLAKE.CORTEX.AI_EXTRACT(
-                text => s.excerpt,
+                text => s.EXCERPT,
                 responseFormat => {
                     ''event_type'': ''string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other'',
                     ''sentiment'': ''string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED'',
@@ -324,7 +293,8 @@ BEGIN
             NULLIF(e.ai_result:response:key_metrics::VARCHAR, ''None''),
             CASE WHEN e.ai_result:response:risk_flags::VARCHAR = ''None'' THEN NULL ELSE e.ai_result:response:risk_flags::ARRAY END,
             CASE WHEN e.ai_result:response:material_items::VARCHAR = ''None'' THEN NULL ELSE e.ai_result:response:material_items::ARRAY END,
-            e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, ''arctic-extract'', e.IS_AMENDMENT
+            e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, ''arctic-extract'', e.IS_AMENDMENT,
+            ''section_targeted'', CURRENT_TIMESTAMP()
         FROM extracted e WHERE e.ai_result IS NOT NULL
     ';
 
@@ -432,5 +402,110 @@ BEGIN
     CALL TRIGGER_PROCESS_FILINGS(ARRAY_CONSTRUCT(:P_ACCESSION_NO));
     LET result VARCHAR := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
     RETURN :result;
+END;
+$$;
+
+
+-- =============================================================================
+-- SP: REEXTRACT_SIGNALS (Force re-extraction with section-targeted method)
+-- =============================================================================
+-- Deletes existing signals for the given accessions and re-extracts using
+-- V_SIGNAL_EXCERPT (section-targeted for 10-K/10-Q). Logs the new method.
+--
+-- Usage:
+--   -- Re-extract a single filing:
+--   CALL REEXTRACT_SIGNALS(ARRAY_CONSTRUCT('0000320193-25-000079'));
+--
+--   -- Re-extract a batch:
+--   CALL REEXTRACT_SIGNALS(ARRAY_CONSTRUCT('acc1', 'acc2', 'acc3'));
+--
+--   -- Re-extract all filings still using old method:
+--   -- (build array from: SELECT ARRAY_AGG(ACCESSION_NO) FROM FILING_SIGNALS
+--   --  WHERE EXTRACTION_METHOD = 'raw_first_16k' AND FORM_TYPE = '10-K' LIMIT 100)
+-- =============================================================================
+
+CREATE OR REPLACE PROCEDURE REEXTRACT_SIGNALS(P_ACCESSIONS ARRAY)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    v_deleted INT := 0;
+    v_extracted INT := 0;
+    v_acc_list VARCHAR;
+BEGIN
+    SELECT LISTAGG('''' || VALUE::VARCHAR || '''', ',') INTO :v_acc_list
+    FROM TABLE(FLATTEN(INPUT => :P_ACCESSIONS));
+
+    IF (:v_acc_list IS NULL OR :v_acc_list = '') THEN
+        RETURN 'No accessions provided.';
+    END IF;
+
+    -- Delete existing signals for these filings
+    EXECUTE IMMEDIATE '
+        DELETE FROM FILING_SIGNALS WHERE ACCESSION_NO IN (' || :v_acc_list || ')
+    ';
+    v_deleted := SQLROWCOUNT;
+
+    -- Reset signal status to PENDING
+    EXECUTE IMMEDIATE '
+        UPDATE FILING_CONTENT SET SIGNAL_STATUS = ''PENDING''
+        WHERE ACCESSION_NO IN (' || :v_acc_list || ')
+    ';
+
+    -- Re-extract using V_SIGNAL_EXCERPT (section-targeted for 10-K/10-Q)
+    EXECUTE IMMEDIATE '
+        INSERT INTO FILING_SIGNALS
+            (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
+             SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
+             KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
+             EXTRACTION_MODEL, IS_AMENDMENT, EXTRACTION_METHOD, SIGNAL_EXTRACTED_AT)
+        WITH source AS (
+            SELECT v.ACCESSION_NO, v.COMPANY_NAME, v.TICKER, v.FORM_TYPE,
+                   v.FILED_AT, v.PERIOD_OF_REPORT, v.IS_AMENDMENT,
+                   v.INDUSTRY_SECTOR, v.INDUSTRY_TITLE, v.EXCERPT
+            FROM V_SIGNAL_EXCERPT v
+            WHERE v.ACCESSION_NO IN (' || :v_acc_list || ')
+        ),
+        extracted AS (
+            SELECT s.*, SNOWFLAKE.CORTEX.AI_EXTRACT(
+                text => s.EXCERPT,
+                responseFormat => {
+                    ''event_type'': ''string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other'',
+                    ''sentiment'': ''string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED'',
+                    ''summary'': ''string - 2-3 sentence summary of the most material information'',
+                    ''key_metrics'': ''object - any financial figures mentioned: revenue, net_income, eps, guidance, yoy_change'',
+                    ''risk_flags'': ''array of strings - specific risk categories mentioned'',
+                    ''material_items'': ''array of strings - for 8-Ks: Item numbers reported''
+                }
+            ) AS ai_result FROM source s
+        )
+        SELECT e.ACCESSION_NO || ''_sig'', e.ACCESSION_NO, e.COMPANY_NAME, e.TICKER, e.FORM_TYPE,
+            e.FILED_AT, e.PERIOD_OF_REPORT,
+            COALESCE(NULLIF(e.ai_result:response:event_type::VARCHAR, ''None''), ''Other''),
+            COALESCE(NULLIF(e.ai_result:response:sentiment::VARCHAR, ''None''), ''NEUTRAL''),
+            NULLIF(e.ai_result:response:summary::TEXT, ''None''),
+            NULLIF(e.ai_result:response:key_metrics::VARCHAR, ''None''),
+            CASE WHEN e.ai_result:response:risk_flags::VARCHAR = ''None'' THEN NULL ELSE e.ai_result:response:risk_flags::ARRAY END,
+            CASE WHEN e.ai_result:response:material_items::VARCHAR = ''None'' THEN NULL ELSE e.ai_result:response:material_items::ARRAY END,
+            e.INDUSTRY_SECTOR, e.INDUSTRY_TITLE, ''arctic-extract'', e.IS_AMENDMENT,
+            ''section_targeted'', CURRENT_TIMESTAMP()
+        FROM extracted e WHERE e.ai_result IS NOT NULL
+    ';
+
+    -- Update signal status
+    EXECUTE IMMEDIATE '
+        UPDATE FILING_CONTENT SET SIGNAL_STATUS = ''EXTRACTED''
+        WHERE ACCESSION_NO IN (' || :v_acc_list || ')
+          AND EXISTS (SELECT 1 FROM FILING_SIGNALS WHERE FILING_SIGNALS.ACCESSION_NO = FILING_CONTENT.ACCESSION_NO)
+    ';
+
+    SELECT COUNT(*) INTO :v_extracted FROM FILING_SIGNALS
+    WHERE ACCESSION_NO IN (SELECT VALUE::VARCHAR FROM TABLE(FLATTEN(INPUT => :P_ACCESSIONS)));
+
+    RETURN 'Re-extracted ' || ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ' filing(s): ' ||
+           :v_deleted::VARCHAR || ' old signals deleted, ' ||
+           :v_extracted::VARCHAR || ' new signals created (section_targeted method).';
 END;
 $$;
