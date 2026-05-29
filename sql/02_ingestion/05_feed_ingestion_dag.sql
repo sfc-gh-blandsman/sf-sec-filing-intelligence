@@ -230,7 +230,7 @@ AS CALL LOAD_FEED_DATE_RANGE(
 
 CREATE OR REPLACE TASK T_FEED_VALIDATE
     WAREHOUSE = IDENTIFIER($config_warehouse)
-    USER_TASK_TIMEOUT_MS = 600000
+    USER_TASK_TIMEOUT_MS = 1200000
     AFTER T_FEED_JAN, T_FEED_FEB, T_FEED_MAR, T_FEED_APR, T_FEED_MAY, T_FEED_JUN,
           T_FEED_JUL, T_FEED_AUG, T_FEED_SEP, T_FEED_OCT, T_FEED_NOV, T_FEED_DEC
 AS
@@ -288,11 +288,24 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM FILING_INDEX fi WHERE fi.ACCESSION_NO = fc.ACCESSION_NO);
     content_orphan_count := SQLROWCOUNT;
 
+    -- 5. Completeness check: gap-fill for current ingestion year
+    --    Calls FILL_FEED_GAPS for each day marked DONE/PARTIAL in current year
+    --    that may have gaps vs the EDGAR daily index.
+    LET current_year VARCHAR;
+    LET gap_fill_result VARCHAR;
+    LET gaps_filled INT := 0;
+    SELECT VALUE INTO :current_year FROM _PIPELINE_CONFIG WHERE KEY = 'current_ingestion_year';
+
+    -- Call the standalone audit SP for the current year (auto-fill enabled)
+    CALL VALIDATE_FEED_COMPLETENESS(:current_year::INT, :current_year::INT, TRUE);
+    gap_fill_result := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
+
     RETURN 'Validation: ' || orphan_count || ' orphans, '
            || empty_count || ' empty content, '
            || dup_count || ' index dupes, '
            || content_dup_count || ' content dupes, '
-           || content_orphan_count || ' content orphans removed';
+           || content_orphan_count || ' content orphans removed. '
+           || 'Gap fill: ' || :gap_fill_result;
 END;
 
 
@@ -345,11 +358,11 @@ BEGIN
           FROM TABLE(GENERATOR(ROWCOUNT => 366))
           WHERE d <= :current_year::VARCHAR || '-12-31'
             AND DAYOFWEEK(d) NOT IN (0, 6));
-    -- done_days includes ALL years in log; filter to current year for percentage
-    -- Count DONE + SKIPPED as "complete" (SKIPPED = no archive exists for that day)
+    -- Count DONE + SKIPPED + INCOMPLETE as "complete" for advancement purposes
+    -- (INCOMPLETE = gap-filler already ran, remaining gaps are permanently unfillable)
     LET year_done_days INT := 0;
     SELECT COUNT(*) INTO :year_done_days FROM _FEED_INGEST_LOG
-    WHERE STATUS IN ('DONE', 'SKIPPED_404', 'SKIPPED_403')
+    WHERE STATUS IN ('DONE', 'INCOMPLETE', 'SKIPPED_404', 'SKIPPED_403')
       AND FEED_DATE >= :current_year::VARCHAR || '-01-01'
       AND FEED_DATE <= :current_year::VARCHAR || '-12-31';
     LET pct_done FLOAT := ROUND(:year_done_days::FLOAT / NULLIF(:total_weekdays, 0) * 100, 1);

@@ -282,6 +282,7 @@ def load_feed_archive(session, feed_date: str, user_agent: str) -> str:
     content_rows = []
     skipped = 0
     total_loaded = 0
+    batch_errors = []
 
     try:
         tar_bytes = io.BytesIO(content)
@@ -350,10 +351,25 @@ def load_feed_archive(session, feed_date: str, user_agent: str) -> str:
                     'PARSE_ERROR': None
                 })
 
-                # Batch flush to bound memory
+                # Batch flush to bound memory (with error resilience)
                 if len(index_rows) >= FLUSH_EVERY:
-                    _flush_batch(index_rows, content_rows)
-                    total_loaded += len(index_rows)
+                    try:
+                        _flush_batch(index_rows, content_rows)
+                        total_loaded += len(index_rows)
+                    except Exception as batch_err:
+                        # Retry individual rows to save what we can
+                        consecutive_failures = 0
+                        for i in range(len(index_rows)):
+                            try:
+                                _flush_batch([index_rows[i]], [content_rows[i]])
+                                total_loaded += 1
+                                consecutive_failures = 0
+                            except Exception:
+                                batch_errors.append(index_rows[i].get('ACCESSION_NO', 'unknown'))
+                                consecutive_failures += 1
+                                if consecutive_failures >= 5:
+                                    batch_errors.append(f"...aborted after 5 consecutive failures in batch")
+                                    break
                     index_rows = []
                     content_rows = []
                     # Update progress
@@ -366,28 +382,66 @@ def load_feed_archive(session, feed_date: str, user_agent: str) -> str:
     except Exception as e:
         # Flush any accumulated rows before reporting error
         if index_rows:
-            _flush_batch(index_rows, content_rows)
-            total_loaded += len(index_rows)
-        return f"ERROR parsing tar.gz (loaded {total_loaded} before error): {str(e)[:500]}"
+            try:
+                _flush_batch(index_rows, content_rows)
+                total_loaded += len(index_rows)
+            except Exception:
+                # Try individual rows
+                for i in range(len(index_rows)):
+                    try:
+                        _flush_batch([index_rows[i]], [content_rows[i]])
+                        total_loaded += 1
+                    except Exception:
+                        batch_errors.append(index_rows[i].get('ACCESSION_NO', 'unknown'))
+        session.sql(f"""
+            UPDATE {fqn}._FEED_INGEST_LOG
+            SET loaded = {total_loaded}, status = 'PARTIAL',
+                updated_at = CURRENT_TIMESTAMP()
+            WHERE feed_date = '{feed_date}'
+        """).collect()
+        return f"ERROR parsing tar.gz (loaded {total_loaded}, {len(batch_errors)} failures): {str(e)[:300]}"
 
     # Final flush for remaining rows
     if index_rows:
-        _flush_batch(index_rows, content_rows)
-        total_loaded += len(index_rows)
+        try:
+            _flush_batch(index_rows, content_rows)
+            total_loaded += len(index_rows)
+        except Exception as batch_err:
+            # Retry individual rows
+            consecutive_failures = 0
+            for i in range(len(index_rows)):
+                try:
+                    _flush_batch([index_rows[i]], [content_rows[i]])
+                    total_loaded += 1
+                    consecutive_failures = 0
+                except Exception:
+                    batch_errors.append(index_rows[i].get('ACCESSION_NO', 'unknown'))
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        batch_errors.append(f"...aborted after 5 consecutive failures in final batch")
+                        break
 
     if total_loaded == 0:
         return f"No target filings in feed archive for {feed_date}. Skipped: {skipped}"
 
-    # Mark day as complete
+    # Determine final status
+    if batch_errors:
+        final_status = 'PARTIAL'
+    else:
+        final_status = 'DONE'
+
+    # Mark day with accurate status
     session.sql(f"""
         UPDATE {fqn}._FEED_INGEST_LOG
-        SET loaded = {total_loaded}, status = 'DONE', updated_at = CURRENT_TIMESTAMP()
+        SET loaded = {total_loaded}, status = '{final_status}', updated_at = CURRENT_TIMESTAMP()
         WHERE feed_date = '{feed_date}'
     """).collect()
 
-    return (f"Feed archive {feed_date}: loaded {total_loaded} filings, skipped {skipped}. "
+    error_summary = f" Failures: {', '.join(batch_errors[:10])}" if batch_errors else ""
+    return (f"Feed archive {feed_date}: loaded {total_loaded}/{total_loaded + len(batch_errors)} filings "
+            f"({final_status}), skipped {skipped}. "
             f"Download: {expected_size/(1024*1024):.0f} MB in {download_seconds}s "
-            f"({download_attempts} attempt{'s' if download_attempts > 1 else ''})")
+            f"({download_attempts} attempt{'s' if download_attempts > 1 else ''}).{error_summary}")
 $$;
 
 
@@ -430,7 +484,7 @@ BEGIN
                 SELECT STATUS INTO :day_status FROM _FEED_INGEST_LOG WHERE FEED_DATE = :cur_date;
             EXCEPTION WHEN OTHER THEN day_status := ''; END;
 
-            IF (:day_status IN ('DONE', 'SKIPPED_404', 'SKIPPED_403')) THEN
+            IF (:day_status IN ('DONE', 'INCOMPLETE', 'SKIPPED_404', 'SKIPPED_403')) THEN
                 skipped := skipped + 1;
             ELSE
                 CALL LOAD_FEED_ARCHIVE(TO_VARCHAR(:cur_date, 'YYYY-MM-DD'), :USER_AGENT);
