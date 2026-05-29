@@ -1121,17 +1121,24 @@ def render_pipeline_control():
     if not df_pending.empty:
         st.dataframe(df_pending, use_container_width=True, hide_index=True, height=250)
 
-        # Process a single filing
+        # Multi-select filings to process
         filing_options = df_pending["ACCESSION_NO"].tolist()
-        selected_filing = st.selectbox("Select filing to process:", filing_options, key="hygiene_select",
-                                       format_func=lambda a: f"{a} — {df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['COMPANY_NAME']} ({df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['FORM_TYPE']})")
-        if st.button("Process Filing Now", type="primary", key="hygiene_process"):
-            try:
-                result = session.sql(f"CALL TRIGGER_PROCESS_FILING('{selected_filing}')").collect()
-                if result:
-                    st.success(result[0][0])
-            except Exception as e:
-                st.error(f"Failed: {str(e)[:200]}")
+        selected_filings = st.multiselect(
+            "Select filing(s) to process:",
+            filing_options,
+            key="hygiene_select",
+            format_func=lambda a: f"{a} — {df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['COMPANY_NAME']} ({df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['FORM_TYPE']})"
+        )
+        if selected_filings:
+            st.caption(f"{len(selected_filings)} filing(s) selected")
+            if st.button(f"Process {len(selected_filings)} Filing(s) Now", type="primary", key="hygiene_process"):
+                try:
+                    acc_list = ",".join(f"'{a}'" for a in selected_filings)
+                    result = session.sql(f"CALL TRIGGER_PROCESS_FILINGS(ARRAY_CONSTRUCT({acc_list}))").collect()
+                    if result:
+                        st.success(result[0][0])
+                except Exception as e:
+                    st.error(f"Failed: {str(e)[:200]}")
     else:
         st.success("All filings are fully processed.")
 
