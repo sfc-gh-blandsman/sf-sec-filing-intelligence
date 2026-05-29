@@ -1963,6 +1963,24 @@ def render_research_explorer():
     mode = st.session_state.get("re_output_mode", "Excerpts")
 
     if results:
+        # Results header banner with pills
+        mode_colors = {"Excerpts": "#29B5E8", "Summarized": "#9B59B6", "Compared": "#E67E22"}
+        mode_color = mode_colors.get(mode, "#29B5E8")
+        pills_html = (
+            f'<span style="display:inline-block; background:{mode_color}; color:#fff; padding:4px 12px; '
+            f'border-radius:16px; font-size:0.85em; font-weight:600; margin-right:8px;">{mode}</span>'
+        )
+        if mode in ("Summarized", "Compared"):
+            pills_html += (
+                f'<span style="display:inline-block; background:#555; color:#fff; padding:4px 12px; '
+                f'border-radius:16px; font-size:0.85em; margin-right:8px;">{research_model}</span>'
+            )
+        pills_html += (
+            f'<span style="display:inline-block; background:#2ECC40; color:#fff; padding:4px 12px; '
+            f'border-radius:16px; font-size:0.85em;">{len(results)} results</span>'
+        )
+        st.markdown(pills_html, unsafe_allow_html=True)
+        st.write("")  # spacer
         if mode == "Excerpts":
             # Group by company
             df_results = pd.DataFrame(results)
