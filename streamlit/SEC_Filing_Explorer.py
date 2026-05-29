@@ -1310,22 +1310,35 @@ def render_data_quality():
     # -------------------------------------------------------------------------
     # Section 1: Pipeline Data Flow
     # -------------------------------------------------------------------------
-    st.subheader("Pipeline Data Flow")
+    st.markdown("#### Pipeline Data Flow")
+    st.caption("How data moves through the pipeline — each stage's source, output, and method.")
     st.markdown("""
-    **How data moves through the pipeline and what each step produces:**
+<style>
+.pipeline-table { font-size: 0.78em; }
+.pipeline-table th { background: #1E3A5F; color: white; padding: 4px 8px; }
+.pipeline-table td { padding: 3px 8px; border-bottom: 1px solid #eee; }
+</style>
+<div class="pipeline-table">
 
-    | Stage | Source | Output | Method |
-    |-------|--------|--------|--------|
-    | **Feed Ingestion** | SEC EDGAR daily tar.gz archives | FILING_INDEX (metadata) + FILING_CONTENT (raw text) | SEC headers provide: CIK, company name, form type, filed date, SIC code, period of report |
-    | **Ticker Enrichment** | SEC EDGAR company tickers API | FILING_INDEX.TICKER | CIK → ticker lookup via `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=...` |
-    | **Industry Classification** | SIC code (from feed headers) | FILING_INDEX.INDUSTRY_SECTOR | 4-digit SIC code mapped to 9 sectors via SIC_CODES reference table |
-    | **Chunking** | FILING_CONTENT.CONTENT_TEXT | FILING_CHUNKS | Section-aware splitting: 1500 chars, 200 overlap. Identifies sections (MD&A, Risk Factors, Financial Statements, etc.) |
-    | **Signal Extraction** | First 16K chars of filing content | FILING_SIGNALS | `AI_EXTRACT` (arctic-extract) → event_type, sentiment, summary, risk_flags, material_items |
-    | **Key Metrics** | Keyword-targeted chunks (Financial Statements + MD&A) | FILING_SIGNALS.REVENUE, NET_INCOME, EPS | `AI_COMPLETE` (llama3.3-70b) with structured output on chunks containing revenue/earnings keywords |
-    | **Forward Guidance** | Outlook-keyword chunks (MD&A + Business) | FILING_SIGNALS.FORWARD_GUIDANCE | `AI_COMPLETE` (llama3.3-70b) on chunks containing "expect", "outlook", "forecast" language |
-    | **Normalization** | AI text output (e.g., "$2.1 billion") | REVENUE_NORMALIZED, EPS_NORMALIZED | Rule-based parsing: billion→×1000M, million→as-is, thousands→÷1000, with validation caps |
-    | **Industry Propagation** | FILING_INDEX.INDUSTRY_SECTOR | FILING_CHUNKS + FILING_SIGNALS | Copies sector/ticker from index to downstream tables after processing |
-    """)
+| # | Stage | Source | Output | Method |
+|:--|:------|:-------|:-------|:-------|
+| 1 | Feed Ingestion | SEC EDGAR nc.tar.gz | FILING_INDEX + FILING_CONTENT | Daily archive download + parse |
+| 2 | Gap Filling | EDGAR daily index | FILING_INDEX + FILING_CONTENT | Compare vs index, download missing |
+| 3 | Ticker Enrichment | SEC company API | FILING_INDEX.TICKER | CIK → ticker lookup |
+| 4 | Industry Classification | SIC_CODES table | FILING_INDEX.INDUSTRY_SECTOR | 4-digit SIC → 9 sectors |
+| 5 | Chunking | FILING_CONTENT | FILING_CHUNKS | Section-aware: 1500 chars, 200 overlap |
+| 6 | Signal Extraction | V_SIGNAL_EXCERPT | FILING_SIGNALS | AI_EXTRACT (arctic-extract) |
+| 7 | Key Metrics | Keyword-targeted chunks | REVENUE, NET_INCOME, EPS | AI_COMPLETE (llama3.3-70b) |
+| 8 | Forward Guidance | Outlook-keyword chunks | FORWARD_GUIDANCE | AI_COMPLETE (llama3.3-70b) |
+| 9 | Value Normalization | AI text output | REVENUE_NORMALIZED, EPS_NORMALIZED | Rule-based parsing + validation |
+| 10 | Event Normalization | EVENT_TYPE (97+ values) | EVENT_TYPE_NORMALIZED (12) | CASE WHEN mapping |
+| 11 | Industry Propagation | FILING_INDEX | CHUNKS + SIGNALS tables | Copy sector/ticker downstream |
+| 12 | Cortex Search | FILING_CHUNKS | SEC_FILING_SEARCH | Arctic M-v1.5, incremental refresh |
+| 13 | Semantic View | SIGNALS + INDEX | SEC_FILING_ANALYTICS | Live query (no materialization) |
+| 14 | Agent | Search + Analyst | SEC_FILING_AGENT | claude-opus-4-7, 2 tools |
+
+</div>
+""", unsafe_allow_html=True)
 
     st.divider()
 
