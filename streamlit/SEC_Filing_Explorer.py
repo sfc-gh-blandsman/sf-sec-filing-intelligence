@@ -1351,20 +1351,17 @@ def render_data_quality():
     df_low_vol = get_low_volume_days()
     if not df_low_vol.empty:
         st.dataframe(df_low_vol, use_container_width=True, hide_index=True)
-        if st.button("Investigate Low-Volume Days", key="dq_drill_lowvol"):
-            st.session_state["dq_drill"] = "lowvol"
+        drill_date = st.selectbox("Investigate day:", df_low_vol["FEED_DATE"].tolist(), key="dq_lowvol_select")
+        if drill_date:
+            detail = session.sql(f"""
+                SELECT FORM_TYPE, COUNT(*) AS cnt
+                FROM FILING_INDEX WHERE LEFT(FILED_AT::VARCHAR, 10) = '{drill_date}'
+                GROUP BY 1 ORDER BY 2 DESC
+            """).to_pandas()
+            st.caption(f"Filing breakdown for {drill_date}:")
+            st.dataframe(detail, hide_index=True)
     else:
         st.success("No low-volume outlier days detected.")
-
-    if st.session_state.get("dq_drill") == "lowvol" and not df_low_vol.empty:
-        drill_date = df_low_vol.iloc[0]["FEED_DATE"]
-        st.caption(f"Detail for worst day: {drill_date}")
-        detail = session.sql(f"""
-            SELECT FORM_TYPE, COUNT(*) AS cnt
-            FROM FILING_INDEX WHERE LEFT(FILED_AT::VARCHAR, 10) = '{drill_date}'
-            GROUP BY 1 ORDER BY 2 DESC
-        """).to_pandas()
-        st.dataframe(detail, hide_index=True)
 
     # Outlier 2: Revenue outliers
     st.markdown("**Revenue Outliers** (> $500B or negative)")
