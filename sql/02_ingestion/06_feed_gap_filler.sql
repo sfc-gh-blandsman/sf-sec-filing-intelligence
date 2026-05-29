@@ -313,7 +313,7 @@ def validate_feed_completeness(session, p_start_year, p_end_year, p_auto_fill, p
     # Get all DONE days in range
     rows = session.sql(f"""
         SELECT FEED_DATE, LOADED FROM {fqn}._FEED_INGEST_LOG
-        WHERE STATUS IN ('DONE', 'PARTIAL')
+        WHERE STATUS IN ('DONE', 'PARTIAL', 'INCOMPLETE')
           AND LEFT(FEED_DATE, 4)::INT BETWEEN {p_start_year} AND {p_end_year}
         ORDER BY FEED_DATE
     """).collect()
