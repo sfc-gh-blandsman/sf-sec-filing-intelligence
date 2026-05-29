@@ -1094,10 +1094,28 @@ def render_pipeline_control():
 
     try:
         hm = get_hygiene_metrics()
+        pending_chunk = int(hm['PENDING_CHUNK'])
+        pending_signal = int(hm['PENDING_SIGNAL'])
+        no_content = int(hm['NO_CONTENT'])
+
+        def _backlog_color(val):
+            if val == 0: return "#2ECC40"
+            elif val < 100: return "#FFDC00"
+            else: return "#FF4136"
+
         col1, col2, col3 = st.columns(3)
-        col1.metric("Pending Chunking", f"{int(hm['PENDING_CHUNK']):,}")
-        col2.metric("Pending Signals", f"{int(hm['PENDING_SIGNAL']):,}")
-        col3.metric("No Content", f"{int(hm['NO_CONTENT']):,}")
+        col1.markdown(
+            f'<div style="text-align:center; padding:12px; border-radius:8px; border:2px solid {_backlog_color(pending_chunk)}">'
+            f'<div style="font-size:2em; font-weight:bold; color:{_backlog_color(pending_chunk)}">{pending_chunk:,}</div>'
+            f'<div style="color:#666">Pending Chunking</div></div>', unsafe_allow_html=True)
+        col2.markdown(
+            f'<div style="text-align:center; padding:12px; border-radius:8px; border:2px solid {_backlog_color(pending_signal)}">'
+            f'<div style="font-size:2em; font-weight:bold; color:{_backlog_color(pending_signal)}">{pending_signal:,}</div>'
+            f'<div style="color:#666">Pending Signals</div></div>', unsafe_allow_html=True)
+        col3.markdown(
+            f'<div style="text-align:center; padding:12px; border-radius:8px; border:2px solid {_backlog_color(no_content)}">'
+            f'<div style="font-size:2em; font-weight:bold; color:{_backlog_color(no_content)}">{no_content:,}</div>'
+            f'<div style="color:#666">No Content</div></div>', unsafe_allow_html=True)
     except Exception:
         pass
 
@@ -1175,6 +1193,46 @@ def render_pipeline_control():
 
 def render_data_quality():
     st.header("Data Quality")
+
+    # Health Score Badge
+    @st.cache_data(ttl=300)
+    def compute_health_score():
+        row = session.sql("""
+            SELECT
+                (SELECT COUNT(*) FROM FILING_INDEX) AS idx,
+                (SELECT COUNT(*) FROM FILING_CONTENT) AS content,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE PARSE_STATUS = 'CHUNKED') AS chunked,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE SIGNAL_STATUS = 'EXTRACTED') AS extracted,
+                (SELECT COUNT(TICKER) FROM FILING_INDEX) AS has_ticker,
+                (SELECT COUNT(INDUSTRY_SECTOR) FROM FILING_INDEX) AS has_sector
+        """).collect()[0]
+        idx = max(int(row["IDX"]), 1)
+        content = max(int(row["CONTENT"]), 1)
+        scores = [
+            int(row["CONTENT"]) / idx,           # content coverage
+            int(row["CHUNKED"]) / content,        # chunking coverage
+            int(row["EXTRACTED"]) / content,      # signal coverage
+            int(row["HAS_TICKER"]) / idx,         # ticker enrichment
+            int(row["HAS_SECTOR"]) / idx,         # sector enrichment
+        ]
+        return round(sum(scores) / len(scores) * 100, 0)
+
+    try:
+        health = compute_health_score()
+        if health >= 90:
+            color = "#2ECC40"
+        elif health >= 70:
+            color = "#FFDC00"
+        else:
+            color = "#FF4136"
+        st.markdown(
+            f'<div style="display:inline-block; background:{color}; color:#fff; padding:6px 16px; '
+            f'border-radius:20px; font-weight:bold; font-size:1.1em; margin-bottom:12px;">'
+            f'Health Score: {health:.0f}/100</div>',
+            unsafe_allow_html=True
+        )
+    except Exception:
+        pass
 
     # -------------------------------------------------------------------------
     # Section 1: Pipeline Data Flow
@@ -1553,6 +1611,75 @@ def render_data_quality():
         if "dq_drill" in st.session_state:
             del st.session_state["dq_drill"]
         st.rerun()
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # Section 2c: Signal Extraction Method
+    # -------------------------------------------------------------------------
+    st.subheader("Signal Extraction Method")
+    st.caption("Tracks which extraction strategy was used on each signal and migration progress.")
+
+    @st.cache_data(ttl=300)
+    def get_extraction_method_stats():
+        return session.sql("""
+            SELECT
+                COALESCE(EXTRACTION_METHOD, 'raw_first_16k') AS METHOD,
+                COUNT(*) AS CNT,
+                COUNT(CASE WHEN RISK_FLAGS IS NOT NULL THEN 1 END) AS HAS_RISK_FLAGS,
+                COUNT(CASE WHEN KEY_METRICS IS NOT NULL THEN 1 END) AS HAS_KEY_METRICS
+            FROM FILING_SIGNALS
+            GROUP BY 1
+        """).to_pandas()
+
+    try:
+        df_method = get_extraction_method_stats()
+        if not df_method.empty:
+            col_pie, col_quality = st.columns(2)
+
+            with col_pie:
+                st.markdown("**Extraction Method Distribution**")
+                colors = {"section_targeted": "#2ECC40", "raw_first_16k": "#AAAAAA"}
+                fig = px.pie(df_method, values="CNT", names="METHOD",
+                            color="METHOD", color_discrete_map=colors,
+                            hole=0.4)
+                fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_quality:
+                st.markdown("**Quality: Fill Rate by Method**")
+                df_method["PCT_RISK_FLAGS"] = (df_method["HAS_RISK_FLAGS"] * 100.0 / df_method["CNT"]).round(1)
+                df_method["PCT_KEY_METRICS"] = (df_method["HAS_KEY_METRICS"] * 100.0 / df_method["CNT"]).round(1)
+                df_qual = df_method.melt(id_vars=["METHOD"], value_vars=["PCT_RISK_FLAGS", "PCT_KEY_METRICS"],
+                                         var_name="Field", value_name="Fill Rate %")
+                df_qual["Field"] = df_qual["Field"].map({"PCT_RISK_FLAGS": "Risk Flags", "PCT_KEY_METRICS": "Key Metrics"})
+                fig = px.bar(df_qual, x="METHOD", y="Fill Rate %", color="Field",
+                            barmode="group", text_auto=".1f",
+                            color_discrete_sequence=["#FF6B35", "#11567F"])
+                fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
+                                 yaxis_range=[0, 100])
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Section budget visualization
+        st.markdown("**Section Budget Allocation** (16K char excerpt for 10-K/10-Q)")
+        budget_data = [
+            {"Section": "Risk Factors", "Budget": 3000, "Purpose": "risk_flags"},
+            {"Section": "MD&A", "Budget": 5000, "Purpose": "sentiment, summary, metrics"},
+            {"Section": "Financial Statements", "Budget": 3000, "Purpose": "key_metrics"},
+            {"Section": "Business", "Budget": 3000, "Purpose": "event_type, summary"},
+            {"Section": "Market Risk", "Budget": 2000, "Purpose": "risk_flags"},
+        ]
+        df_budget = pd.DataFrame(budget_data)
+        fig = px.bar(df_budget, x="Budget", y="Section", orientation="h",
+                    text="Budget", color="Purpose",
+                    color_discrete_sequence=px.colors.qualitative.Set2)
+        fig.update_layout(height=200, margin=dict(l=10, r=10, t=10, b=10),
+                         xaxis_title="Characters", showlegend=True,
+                         legend=dict(orientation="h", yanchor="bottom", y=-0.4))
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        pass
 
     st.divider()
 
