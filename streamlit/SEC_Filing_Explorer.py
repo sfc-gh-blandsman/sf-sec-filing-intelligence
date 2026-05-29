@@ -1167,6 +1167,304 @@ def render_data_quality():
     st.divider()
 
     # -------------------------------------------------------------------------
+    # Section 2b: Data Completeness
+    # -------------------------------------------------------------------------
+    st.subheader("Data Completeness")
+
+    # --- Filings Over Time ---
+    st.markdown("**Filings by Year and Form Type**")
+
+    @st.cache_data(ttl=300)
+    def get_filings_by_year_type():
+        return session.sql("""
+            SELECT YEAR(FILED_AT) AS YEAR, FORM_TYPE, COUNT(*) AS CNT
+            FROM FILING_INDEX
+            WHERE YEAR(FILED_AT) >= 2020
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """).to_pandas()
+
+    df_year_type = get_filings_by_year_type()
+    if not df_year_type.empty:
+        fig = px.bar(df_year_type, x="YEAR", y="CNT", color="FORM_TYPE",
+                     barmode="stack", text_auto=True,
+                     color_discrete_sequence=px.colors.qualitative.Set2)
+        fig.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20),
+                         xaxis_title="Year", yaxis_title="Filings",
+                         legend_title="Form Type")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Recent 90-day daily volume
+    st.markdown("**Daily Ingestion Volume (Last 90 Days)**")
+
+    @st.cache_data(ttl=300)
+    def get_daily_volume():
+        return session.sql("""
+            SELECT LEFT(FILED_AT::VARCHAR, 10) AS FILED_DATE, COUNT(*) AS CNT
+            FROM FILING_INDEX
+            WHERE FILED_AT >= DATEADD('day', -90, CURRENT_TIMESTAMP())
+            GROUP BY 1
+            ORDER BY 1
+        """).to_pandas()
+
+    df_daily = get_daily_volume()
+    if not df_daily.empty:
+        fig = px.line(df_daily, x="FILED_DATE", y="CNT",
+                     color_discrete_sequence=["#11567F"])
+        fig.update_layout(height=250, margin=dict(l=20, r=20, t=10, b=20),
+                         xaxis_title="Date", yaxis_title="Filings/Day")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # --- Processing Pipeline Status ---
+    st.markdown("**Processing Pipeline Status**")
+
+    @st.cache_data(ttl=300)
+    def get_processing_status():
+        return session.sql("""
+            SELECT
+                (SELECT COUNT(*) FROM FILING_INDEX) AS idx,
+                (SELECT COUNT(*) FROM FILING_CONTENT) AS content,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE PARSE_STATUS = 'CHUNKED') AS chunked,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE SIGNAL_STATUS = 'EXTRACTED') AS extracted,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE PARSE_STATUS = 'PENDING') AS pending_chunk,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE SIGNAL_STATUS = 'PENDING') AS pending_signal,
+                (SELECT COUNT(*) FROM FILING_INDEX fi WHERE NOT EXISTS (
+                    SELECT 1 FROM FILING_CONTENT fc WHERE fc.ACCESSION_NO = fi.ACCESSION_NO
+                )) AS idx_no_content
+        """).collect()[0]
+
+    try:
+        ps = get_processing_status()
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Index", f"{int(ps['IDX']):,}")
+        col2.metric("Content", f"{int(ps['CONTENT']):,}")
+        col3.metric("Chunked", f"{int(ps['CHUNKED']):,}")
+        col4.metric("Signals Extracted", f"{int(ps['EXTRACTED']):,}")
+
+        # Pending backlog
+        pending_chunk = int(ps["PENDING_CHUNK"])
+        pending_signal = int(ps["PENDING_SIGNAL"])
+        idx_no_content = int(ps["IDX_NO_CONTENT"])
+        if pending_chunk > 0 or pending_signal > 0 or idx_no_content > 0:
+            st.warning(f"**Backlog:** {idx_no_content:,} filings without content | "
+                      f"{pending_chunk:,} awaiting chunking | {pending_signal:,} awaiting signal extraction")
+    except Exception:
+        pass
+
+    st.divider()
+
+    # --- Enrichment Coverage by Year ---
+    st.markdown("**Enrichment Coverage by Year**")
+
+    @st.cache_data(ttl=300)
+    def get_enrichment_by_year():
+        return session.sql("""
+            SELECT YEAR(FILED_AT) AS YEAR,
+                   COUNT(*) AS TOTAL,
+                   ROUND(COUNT(TICKER) * 100.0 / COUNT(*), 1) AS PCT_TICKER,
+                   ROUND(COUNT(INDUSTRY_SECTOR) * 100.0 / COUNT(*), 1) AS PCT_SECTOR,
+                   ROUND(COUNT(PERIOD_OF_REPORT) * 100.0 / COUNT(*), 1) AS PCT_PERIOD,
+                   ROUND(COUNT(SIC_CODE) * 100.0 / COUNT(*), 1) AS PCT_SIC
+            FROM FILING_INDEX
+            WHERE YEAR(FILED_AT) >= 2020
+            GROUP BY 1 ORDER BY 1
+        """).to_pandas()
+
+    df_enrich = get_enrichment_by_year()
+    if not df_enrich.empty:
+        # Melt for grouped bar
+        df_melt = df_enrich.melt(id_vars=["YEAR", "TOTAL"],
+                                  value_vars=["PCT_TICKER", "PCT_SECTOR", "PCT_PERIOD", "PCT_SIC"],
+                                  var_name="Metric", value_name="Percent")
+        df_melt["Metric"] = df_melt["Metric"].map({
+            "PCT_TICKER": "Ticker", "PCT_SECTOR": "Industry Sector",
+            "PCT_PERIOD": "Period of Report", "PCT_SIC": "SIC Code"
+        })
+        fig = px.bar(df_melt, x="YEAR", y="Percent", color="Metric",
+                     barmode="group", text_auto=".0f",
+                     color_discrete_sequence=px.colors.qualitative.Set1)
+        fig.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20),
+                         yaxis_range=[0, 105], yaxis_title="% Coverage")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Extraction Coverage by Year (10-K/10-Q only) ---
+    st.markdown("**Extraction Coverage by Year** (10-K and 10-Q only)")
+
+    @st.cache_data(ttl=300)
+    def get_extraction_by_year():
+        return session.sql("""
+            SELECT YEAR(SIGNAL_DATE) AS YEAR,
+                   COUNT(*) AS TOTAL,
+                   ROUND(COUNT(REVENUE) * 100.0 / NULLIF(COUNT(*), 0), 1) AS PCT_REVENUE,
+                   ROUND(COUNT(EPS) * 100.0 / NULLIF(COUNT(*), 0), 1) AS PCT_EPS,
+                   ROUND(COUNT(FORWARD_GUIDANCE) * 100.0 / NULLIF(COUNT(*), 0), 1) AS PCT_GUIDANCE,
+                   ROUND(COUNT(REVENUE_NORMALIZED) * 100.0 / NULLIF(COUNT(*), 0), 1) AS PCT_REV_NORM
+            FROM FILING_SIGNALS
+            WHERE FORM_TYPE IN ('10-K', '10-Q')
+              AND YEAR(SIGNAL_DATE) >= 2020
+            GROUP BY 1 ORDER BY 1
+        """).to_pandas()
+
+    df_extract = get_extraction_by_year()
+    if not df_extract.empty:
+        df_ext_melt = df_extract.melt(id_vars=["YEAR", "TOTAL"],
+                                       value_vars=["PCT_REVENUE", "PCT_EPS", "PCT_GUIDANCE", "PCT_REV_NORM"],
+                                       var_name="Metric", value_name="Percent")
+        df_ext_melt["Metric"] = df_ext_melt["Metric"].map({
+            "PCT_REVENUE": "Revenue (raw)", "PCT_EPS": "EPS (raw)",
+            "PCT_GUIDANCE": "Forward Guidance", "PCT_REV_NORM": "Revenue (normalized)"
+        })
+        fig = px.bar(df_ext_melt, x="YEAR", y="Percent", color="Metric",
+                     barmode="group", text_auto=".0f",
+                     color_discrete_sequence=px.colors.qualitative.Pastel1)
+        fig.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20),
+                         yaxis_range=[0, 55], yaxis_title="% Coverage")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # --- Outlier Detection ---
+    st.subheader("Outlier Detection")
+
+    # Outlier 1: Low-volume ingestion days
+    st.markdown("**Low-Volume Ingestion Days** (< 50% of 5-day rolling average)")
+
+    @st.cache_data(ttl=300)
+    def get_low_volume_days():
+        return session.sql("""
+            WITH daily AS (
+                SELECT FEED_DATE, LOADED,
+                       AVG(LOADED) OVER (ORDER BY FEED_DATE ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING) AS avg_5day
+                FROM _FEED_INGEST_LOG
+                WHERE STATUS = 'DONE' AND LOADED > 0
+            )
+            SELECT FEED_DATE, LOADED, ROUND(avg_5day) AS AVG_NEARBY,
+                   ROUND(LOADED * 100.0 / NULLIF(avg_5day, 0), 0) AS PCT_OF_AVG
+            FROM daily
+            WHERE LOADED < avg_5day * 0.5 AND avg_5day > 50
+            ORDER BY PCT_OF_AVG ASC
+            LIMIT 20
+        """).to_pandas()
+
+    df_low_vol = get_low_volume_days()
+    if not df_low_vol.empty:
+        st.dataframe(df_low_vol, use_container_width=True, hide_index=True)
+        if st.button("Investigate Low-Volume Days", key="dq_drill_lowvol"):
+            st.session_state["dq_drill"] = "lowvol"
+    else:
+        st.success("No low-volume outlier days detected.")
+
+    if st.session_state.get("dq_drill") == "lowvol" and not df_low_vol.empty:
+        drill_date = df_low_vol.iloc[0]["FEED_DATE"]
+        st.caption(f"Detail for worst day: {drill_date}")
+        detail = session.sql(f"""
+            SELECT FORM_TYPE, COUNT(*) AS cnt
+            FROM FILING_INDEX WHERE LEFT(FILED_AT::VARCHAR, 10) = '{drill_date}'
+            GROUP BY 1 ORDER BY 2 DESC
+        """).to_pandas()
+        st.dataframe(detail, hide_index=True)
+
+    # Outlier 2: Revenue outliers
+    st.markdown("**Revenue Outliers** (> $500B or negative)")
+
+    @st.cache_data(ttl=300)
+    def get_revenue_outliers():
+        return session.sql("""
+            SELECT ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE, SIGNAL_DATE::VARCHAR AS SIGNAL_DATE,
+                   REVENUE_NORMALIZED AS REV_M, REVENUE AS REV_RAW
+            FROM FILING_SIGNALS
+            WHERE REVENUE_NORMALIZED IS NOT NULL
+              AND (REVENUE_NORMALIZED > 500000 OR REVENUE_NORMALIZED < 0)
+            ORDER BY ABS(REVENUE_NORMALIZED) DESC
+            LIMIT 20
+        """).to_pandas()
+
+    df_rev_outliers = get_revenue_outliers()
+    if not df_rev_outliers.empty:
+        st.dataframe(df_rev_outliers, use_container_width=True, hide_index=True)
+        if st.button("Show Raw Revenue Text", key="dq_drill_rev"):
+            st.session_state["dq_drill"] = "revenue"
+    else:
+        st.success("No revenue outliers detected.")
+
+    if st.session_state.get("dq_drill") == "revenue" and not df_rev_outliers.empty:
+        acc = df_rev_outliers.iloc[0]["ACCESSION_NO"]
+        detail = session.sql(f"""
+            SELECT REVENUE, REVENUE_NORMALIZED, NET_INCOME, EPS, COMPANY_NAME
+            FROM FILING_SIGNALS WHERE ACCESSION_NO = '{acc}'
+        """).collect()
+        if detail:
+            st.json({k: str(v) for k, v in detail[0].asDict().items()})
+
+    # Outlier 3: Chunk size outliers
+    st.markdown("**Chunk Size Outliers**")
+
+    @st.cache_data(ttl=300)
+    def get_chunk_outliers():
+        return session.sql("""
+            SELECT
+                COUNT(CASE WHEN TOKEN_COUNT < 10 THEN 1 END) AS tiny_chunks,
+                COUNT(CASE WHEN TOKEN_COUNT > 450 THEN 1 END) AS oversized_chunks,
+                COUNT(CASE WHEN SECTION_NAME IS NULL OR SECTION_NAME = '' THEN 1 END) AS no_section,
+                COUNT(*) AS total_chunks
+            FROM FILING_CHUNKS
+        """).collect()[0]
+
+    try:
+        co = get_chunk_outliers()
+        tiny = int(co["TINY_CHUNKS"])
+        oversized = int(co["OVERSIZED_CHUNKS"])
+        no_section = int(co["NO_SECTION"])
+        total = int(co["TOTAL_CHUNKS"])
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Tiny (< 10 tokens)", f"{tiny:,}", f"{tiny*100/total:.2f}%")
+        col2.metric("Oversized (> 450 tokens)", f"{oversized:,}", f"{oversized*100/total:.2f}%")
+        col3.metric("No Section Detected", f"{no_section:,}", f"{no_section*100/total:.2f}%")
+
+        if st.button("Show Sample Tiny Chunks", key="dq_drill_chunks"):
+            st.session_state["dq_drill"] = "chunks"
+    except Exception:
+        pass
+
+    if st.session_state.get("dq_drill") == "chunks":
+        samples = session.sql("""
+            SELECT ACCESSION_NO, TICKER, SECTION_NAME, TOKEN_COUNT,
+                   LEFT(CHUNK_TEXT, 200) AS PREVIEW
+            FROM FILING_CHUNKS
+            WHERE TOKEN_COUNT < 10
+            LIMIT 10
+        """).to_pandas()
+        st.dataframe(samples, use_container_width=True, hide_index=True)
+
+    # Outlier 4: Companies with excessive filings
+    st.markdown("**Top Companies by Filing Count** (potential duplicates)")
+
+    @st.cache_data(ttl=300)
+    def get_top_filers():
+        return session.sql("""
+            SELECT CIK, MAX(COMPANY_NAME) AS COMPANY, MAX(TICKER) AS TICKER,
+                   COUNT(*) AS FILINGS, COUNT(DISTINCT FORM_TYPE) AS FORM_TYPES
+            FROM FILING_INDEX
+            GROUP BY CIK
+            ORDER BY FILINGS DESC
+            LIMIT 15
+        """).to_pandas()
+
+    df_top = get_top_filers()
+    if not df_top.empty:
+        st.dataframe(df_top, use_container_width=True, hide_index=True)
+
+    # Clear drill-down state
+    if st.button("Clear Investigation", key="dq_clear_drill"):
+        if "dq_drill" in st.session_state:
+            del st.session_state["dq_drill"]
+        st.rerun()
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
     # Section 3: Quality Indicators (charts)
     # -------------------------------------------------------------------------
     st.subheader("Quality Indicators")
