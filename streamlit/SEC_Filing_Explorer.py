@@ -145,11 +145,12 @@ def render_pipeline_dashboard():
         """).collect()[0]
 
     counts = get_row_counts()
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Filing Index", f"{counts['INDEX_COUNT']:,}")
-    col2.metric("Filing Content", f"{counts['CONTENT_COUNT']:,}")
-    col3.metric("Chunks", f"{counts['CHUNK_COUNT']:,}")
-    col4.metric("Signals", f"{counts['SIGNAL_COUNT']:,}")
+    with st.container(border=True):
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Filing Index", f"{counts['INDEX_COUNT']:,}")
+        col2.metric("Filing Content", f"{counts['CONTENT_COUNT']:,}")
+        col3.metric("Chunks", f"{counts['CHUNK_COUNT']:,}")
+        col4.metric("Signals", f"{counts['SIGNAL_COUNT']:,}")
 
     st.divider()
 
@@ -1398,19 +1399,20 @@ def render_data_quality():
 
     try:
         ps = get_processing_status()
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Index", f"{int(ps['IDX']):,}")
-        col2.metric("Content", f"{int(ps['CONTENT']):,}")
-        col3.metric("Chunked", f"{int(ps['CHUNKED']):,}")
-        col4.metric("Signals Extracted", f"{int(ps['EXTRACTED']):,}")
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Index", f"{int(ps['IDX']):,}")
+            col2.metric("Content", f"{int(ps['CONTENT']):,}")
+            col3.metric("Chunked", f"{int(ps['CHUNKED']):,}")
+            col4.metric("Signals Extracted", f"{int(ps['EXTRACTED']):,}")
 
-        # Pending backlog
-        pending_chunk = int(ps["PENDING_CHUNK"])
-        pending_signal = int(ps["PENDING_SIGNAL"])
-        idx_no_content = int(ps["IDX_NO_CONTENT"])
-        if pending_chunk > 0 or pending_signal > 0 or idx_no_content > 0:
-            st.warning(f"**Backlog:** {idx_no_content:,} filings without content | "
-                      f"{pending_chunk:,} awaiting chunking | {pending_signal:,} awaiting signal extraction")
+            # Pending backlog
+            pending_chunk = int(ps["PENDING_CHUNK"])
+            pending_signal = int(ps["PENDING_SIGNAL"])
+            idx_no_content = int(ps["IDX_NO_CONTENT"])
+            if pending_chunk > 0 or pending_signal > 0 or idx_no_content > 0:
+                st.warning(f"**Backlog:** {idx_no_content:,} filings without content | "
+                          f"{pending_chunk:,} awaiting chunking | {pending_signal:,} awaiting signal extraction")
     except Exception:
         pass
 
@@ -2340,6 +2342,34 @@ def render_research_explorer():
 
 def main():
     st.title("SEC Filing Intelligence")
+
+    # Custom CSS for modern look
+    st.markdown("""
+    <style>
+    /* Snowflake blue accent on headers */
+    h2 { color: #11567F; border-bottom: 2px solid #29B5E8; padding-bottom: 4px; }
+    h3 { color: #1a1a2e; }
+
+    /* Metric styling */
+    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; }
+    [data-testid="stMetricLabel"] { font-size: 0.85rem; color: #666; }
+
+    /* Dataframe header styling */
+    [data-testid="stDataFrame"] th { background-color: #11567F !important; color: white !important; }
+
+    /* Subtle shadows on containers */
+    [data-testid="stVerticalBlock"] > div[data-testid="stExpander"] {
+        border-radius: 8px;
+        border: 1px solid #e0e0e0;
+    }
+
+    /* Tab styling */
+    button[data-baseweb="tab"] { font-weight: 600; }
+
+    /* Progress bars */
+    [data-testid="stProgress"] > div > div { border-radius: 4px; }
+    </style>
+    """, unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Pipeline", "🔬 Data Quality", "🔍 Filing Explorer (RAG)", "🔎 Research Explorer", "💰 Cost Monitor", "⚙️ Pipeline Control", "📈 Agent Eval"
