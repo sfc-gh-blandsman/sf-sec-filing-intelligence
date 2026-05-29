@@ -29,7 +29,7 @@ USE WAREHOUSE IDENTIFIER($config_warehouse);
 -- Usage:
 --   CALL DOWNLOAD_FILING_BATCH(100, '10-K', '2025-01-01', '2025-12-31');
 --
--- For quick start mode, use $config_quick_start_limit as BATCH_LIMIT.
+-- For quick start mode, use 100 as BATCH_LIMIT (adjustable).
 -- =============================================================================
 
 CREATE OR REPLACE PROCEDURE DOWNLOAD_FILING_BATCH(
@@ -159,9 +159,9 @@ $$;
 -- =============================================================================
 -- EXECUTION: Quick Start (100 filings, single form type)
 -- =============================================================================
--- CALL DOWNLOAD_FILING_BATCH($config_quick_start_limit, '10-K', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
--- CALL DOWNLOAD_FILING_BATCH($config_quick_start_limit, '10-Q', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
--- CALL DOWNLOAD_FILING_BATCH($config_quick_start_limit, '8-K', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
+-- CALL DOWNLOAD_FILING_BATCH(100, '10-K', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
+-- CALL DOWNLOAD_FILING_BATCH(100, '10-Q', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
+-- CALL DOWNLOAD_FILING_BATCH(100, '8-K', $config_ingest_start_year || '-01-01', $config_ingest_end_year || '-12-31');
 
 -- =============================================================================
 -- EXECUTION: Full download (all pending filings for a form type)

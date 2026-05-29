@@ -204,6 +204,8 @@ def render_pipeline_dashboard():
         active_dag_name = "Enrichment"
     elif any(t.startswith("T_PROCESSING") or t.startswith("T_CHUNK") or t.startswith("T_SIGNAL") or t.startswith("T_METRICS") or t.startswith("T_GUIDANCE") or t.startswith("T_PROPAGATE") or t.startswith("T_REFRESH") or t.startswith("T_WAIT") for t in executing_tasks):
         active_dag_name = "Processing"
+    elif any(t.startswith("PROCESS_FULL") for t in executing_tasks):
+        active_dag_name = "Custom Processing"
 
     if active_dag_name:
         st.success(f"Active DAG: **{active_dag_name}** — {len(executing_tasks)} task(s) executing")
@@ -211,7 +213,7 @@ def render_pipeline_dashboard():
         st.info("No DAG currently executing.")
 
     # Show DAG tabs
-    dag_tab1, dag_tab2, dag_tab3, dag_tab4 = st.tabs(["Feed Ingestion", "Enrichment", "Processing", "Agent Eval"])
+    dag_tab1, dag_tab2, dag_tab3, dag_tab4, dag_tab5 = st.tabs(["Feed Ingestion", "Enrichment", "Processing", "Custom Processing", "Agent Eval"])
 
     with dag_tab1:
         dot = build_dag_dot(FEED_DAG, task_state_map)
@@ -223,6 +225,43 @@ def render_pipeline_dashboard():
         dot = build_dag_dot(PROCESSING_DAG, task_state_map)
         st.graphviz_chart(dot)
     with dag_tab4:
+        # Dynamic PROCESS_FULL_* DAG monitoring
+        try:
+            dynamic_tasks = session.sql("""
+                SELECT NAME, STATE, SCHEDULED_TIME, COMPLETED_TIME, RETURN_VALUE, ERROR_MESSAGE
+                FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                    SCHEDULED_TIME_RANGE_START => DATEADD('hour', -48, CURRENT_TIMESTAMP()),
+                    RESULT_LIMIT => 50
+                ))
+                WHERE NAME LIKE 'PROCESS_FULL_%'
+                ORDER BY SCHEDULED_TIME DESC
+            """).to_pandas()
+            if dynamic_tasks.empty:
+                st.info("No custom processing runs in the last 48 hours. Trigger one from Pipeline Control → Custom Date Range.")
+            else:
+                # Group by DAG run (extract prefix before last _STEP suffix)
+                dynamic_tasks["DAG_NAME"] = dynamic_tasks["NAME"].str.rsplit("_", n=1).str[0]
+                latest_dag = dynamic_tasks["DAG_NAME"].iloc[0]
+                st.markdown(f"**Latest run:** `{latest_dag}`")
+
+                # Show task status table for latest run
+                latest_run = dynamic_tasks[dynamic_tasks["DAG_NAME"] == latest_dag][["NAME", "STATE", "SCHEDULED_TIME", "COMPLETED_TIME"]].copy()
+                latest_run.columns = ["Task", "Status", "Started", "Completed"]
+                st.dataframe(latest_run, use_container_width=True, hide_index=True)
+
+                # Summary metrics
+                succeeded = (latest_run["Status"] == "SUCCEEDED").sum()
+                failed = (latest_run["Status"] == "FAILED").sum()
+                executing = (latest_run["Status"] == "EXECUTING").sum()
+                if executing > 0:
+                    st.success(f"In progress: {executing} task(s) executing, {succeeded} succeeded")
+                elif failed > 0:
+                    st.error(f"Completed with errors: {succeeded} succeeded, {failed} failed")
+                else:
+                    st.success(f"Complete: {succeeded} task(s) succeeded")
+        except Exception as e:
+            st.warning(f"Could not retrieve custom processing history: {e}")
+    with dag_tab5:
         dot = build_dag_dot(EVAL_DAG, task_state_map)
         st.graphviz_chart(dot)
 
@@ -906,18 +945,27 @@ def render_pipeline_control():
             from datetime import date
             start_dt = col1.date_input("Start Date", value=date(2023, 1, 1))
             end_dt = col2.date_input("End Date", value=date(2023, 1, 31))
-            st.warning("Custom date range calls `LOAD_FEED_DATE_RANGE` directly (no DAG). After completion, you must manually trigger downstream DAGs.")
-            st.markdown("""
-            **After this completes, run in order:**
-            1. `EXECUTE TASK T_ENRICH_ROOT` — ticker enrichment + industry backfill
-            2. Processing DAG chains automatically from enrichment
-            """)
+            st.info("Custom date range ingests filings then automatically runs the full processing pipeline (enrichment, chunking, signal extraction, metrics, guidance, normalization, search refresh, and serving layer update).")
 
-            confirm = st.checkbox("I confirm I want to start this date range ingestion", key="confirm_date")
-            if st.button("Start Date Range Ingestion", disabled=not confirm, type="primary"):
+            confirm = st.checkbox("I confirm I want to start this date range ingestion + processing", key="confirm_date")
+            if st.button("Start Date Range Ingestion + Processing", disabled=not confirm, type="primary"):
                 ua = CONFIG.get("user_agent", "Snowflake SEC-Filing-Project admin@company.com")
-                session.sql(f"CALL LOAD_FEED_DATE_RANGE('{start_dt}', '{end_dt}', '{ua}')").collect()
-                st.success(f"Feed date range {start_dt} to {end_dt} triggered.")
+                with st.spinner("Ingesting filings from SEC EDGAR..."):
+                    session.sql(f"CALL LOAD_FEED_DATE_RANGE('{start_dt}', '{end_dt}', '{ua}')").collect()
+                # Gather loaded accessions and trigger full processing
+                accs_row = session.sql(f"""
+                    SELECT ARRAY_AGG(ACCESSION_NO) AS ACCS
+                    FROM FILING_INDEX
+                    WHERE FILED_AT BETWEEN '{start_dt}' AND '{end_dt}'
+                """).collect()
+                if accs_row and accs_row[0]["ACCS"]:
+                    accs_json = accs_row[0]["ACCS"]
+                    result = session.sql(f"CALL TRIGGER_PROCESS_FILINGS_FULL(PARSE_JSON('{accs_json}'))").collect()
+                    dag_msg = result[0][0] if result else "Processing triggered."
+                    st.success(f"Ingestion complete. Full processing pipeline triggered. {dag_msg}")
+                    st.info("Monitor progress in the **Pipeline** tab → **Custom Processing** sub-tab.")
+                else:
+                    st.warning(f"No filings found for date range {start_dt} to {end_dt}. This may be a weekend/holiday.")
                 st.cache_data.clear()
 
     st.divider()

@@ -47,6 +47,7 @@ RETURNS VARCHAR
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.11'
 PACKAGES = ('snowflake-snowpark-python', 'requests', 'pandas')
+HANDLER = 'fill_feed_gaps'
 EXTERNAL_ACCESS_INTEGRATIONS = (IDENTIFIER($config_eai_name))
 EXECUTE AS CALLER
 AS $$
@@ -291,6 +292,7 @@ RETURNS VARCHAR
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.11'
 PACKAGES = ('snowflake-snowpark-python', 'requests')
+HANDLER = 'validate_feed_completeness'
 EXTERNAL_ACCESS_INTEGRATIONS = (IDENTIFIER($config_eai_name))
 EXECUTE AS CALLER
 AS $$

@@ -52,3 +52,12 @@ CREATE WAREHOUSE IF NOT EXISTS IDENTIFIER($config_warehouse_ingest)
     COMMENT = 'Snowpark-optimized warehouse for feed archive ingestion (multi-cluster for parallel tasks)';
 
 GRANT USAGE ON WAREHOUSE IDENTIFIER($config_warehouse_ingest) TO ROLE SYSADMIN;
+
+-- Compute pool for Streamlit container runtime
+CREATE COMPUTE POOL IF NOT EXISTS STREAMLIT_COMPUTE_POOL
+    MIN_NODES = 1
+    MAX_NODES = 1
+    INSTANCE_FAMILY = CPU_X64_XS
+    AUTO_SUSPEND_SECS = 3600
+    AUTO_RESUME = TRUE
+    COMMENT = 'Compute pool for SEC Filing Intelligence Streamlit dashboard (container runtime)';

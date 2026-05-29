@@ -32,6 +32,9 @@ If executing scripts programmatically (not in Snowsight worksheets):
 - Either execute each phase file as a single multi-statement script, or prefix every statement with the USE context
 - Alternatively, use fully-qualified object names (e.g., `SEC_FILINGS.FILING_DATA.FILING_INDEX`)
 - File uploads to stages require `snow stage copy` (SnowCLI) or the Snowsight UI — there is no pure-SQL equivalent for uploading local files to a stage
+- See the **PROGRAMMATIC DEPLOYMENT GUIDE** in `agents.md` for error patterns, file difficulty ratings, and the `EXECUTE IMMEDIATE $$` workaround
+
+**Snowsight-only requirement:** `sql/06_agent/02_eval_framework.sql` (eval framework) has complex nested SPs that require Snowsight's statement parser. All other scripts are deployable programmatically. The eval framework is optional — the core pipeline works without it.
 
 ---
 
@@ -109,105 +112,77 @@ Open the app from Snowsight: Projects → Streamlit → SEC_FILING_DASHBOARD
 
 **Dependencies:** `snowflake-snowpark-python`, `streamlit`, `plotly` (all from Snowflake Anaconda channel, no version pins needed).
 
+**Runtime dependencies (created progressively during install):**
+- Phase 1: `_PIPELINE_CONFIG` table, `PYPI_EAI`, `STREAMLIT_COMPUTE_POOL`, `FILING_WH`
+- Phase 4: `TRIGGER_PROCESS_FILINGS_FULL` SP (for custom date range in Pipeline Control)
+- Phase 5: `SEC_FILING_SEARCH` service (for Filing Explorer RAG tab)
+- Phase 6b: Task DAGs (for Pipeline Control trigger buttons + DAG status display)
+
+The app handles missing dependencies gracefully (try/except). Tabs that depend on later phases show informational messages until those phases complete.
+
 ---
 
-## Phase 2: Ingestion (~5 minutes for Quick Start)
+## Phase 2: Deploy SPs + Quick Start Pipeline (~15 minutes)
 
-### Worksheet 2: Feed Archive Ingestion
+### Worksheet 2: All SPs + Quick Start
 
-Paste and run in order:
+Paste and run each script in order in ONE worksheet:
 
 1. `sql/00_config.sql` — (always first)
-2. `sql/02_ingestion/04_feed_archive_loader.sql` — Creates LOAD_FEED_ARCHIVE + LOAD_FEED_DATE_RANGE SPs
+2. `sql/02_ingestion/04_feed_archive_loader.sql` — Feed ingestion SPs
+3. `sql/04_enrichment/00_sic_reference_data.sql` — SIC reference data (494 codes)
+4. `sql/04_enrichment/01_ticker_enrichment.sql` — Ticker enrichment SPs
+5. `sql/03_processing/01_text_cleaning_udf.sql` — CLEAN_TEXT UDF
+6. `sql/03_processing/02_chunking_udf.sql` — CHUNK_FILING UDF
+7. `sql/03_processing/07_signal_excerpt_view.sql` — V_SIGNAL_EXCERPT view
+8. `sql/03_processing/05_processing_task_dag.sql` — Signal/metrics/guidance SPs + Processing DAG
+9. `sql/03_processing/06_process_single_filing.sql` — PREPARE_FILINGS, PROCESS_FILINGS, TRIGGER_PROCESS_FILINGS_FULL, QUICK_START SPs
 
-Then execute the Quick Start ingestion (uncomment and run):
+Then run the Quick Start (one call does everything):
 
 ```sql
--- Load one day of filing content (376 filings, ~2 minutes)
--- This downloads metadata + content in a single pass from the feed archive
-CALL LOAD_FEED_ARCHIVE('2025-02-21', $config_user_agent);
+CALL QUICK_START($config_quick_start_date);
 ```
 
-**Verify:**
+This single call:
+- Ingests 376 filings from the configured date (2025-02-21) via feed archive
+- Creates a dynamic task DAG that automatically runs:
+  - Enrichment (ticker + SIC/industry mapping)
+  - Chunking (section-aware, 1500 chars, 200 overlap)
+  - Signal extraction (section-targeted excerpts for 10-K/10-Q)
+  - Key metrics extraction (revenue, EPS, net income, YoY)
+  - Forward guidance extraction
+  - Event type normalization (60+ raw → 12 canonical categories)
+  - Industry/ticker propagation to downstream tables
+  - Cortex Search service refresh
+  - Serving layer update (semantic view + agent redeployment)
+- Returns immediately with a DAG name for monitoring
+- Dynamic tasks self-clean after completion
+
+**Monitor progress:**
+```sql
+SELECT NAME, STATE, SCHEDULED_TIME, COMPLETED_TIME
+FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+    SCHEDULED_TIME_RANGE_START => DATEADD('hour', -2, CURRENT_TIMESTAMP()),
+    RESULT_LIMIT => 20
+))
+WHERE NAME LIKE 'PROCESS_FULL_%'
+ORDER BY SCHEDULED_TIME DESC;
+```
+
+**Verify (after DAG completes, ~15 minutes):**
 ```sql
 SELECT COUNT(*) AS index_rows FROM FILING_INDEX;     -- Should be ~376
 SELECT COUNT(*) AS content_rows FROM FILING_CONTENT; -- Should be ~376
-```
 
----
+SELECT COUNT(*) AS total_signals, COUNT(REVENUE) AS has_revenue,
+       COUNT(FORWARD_GUIDANCE) AS has_guidance,
+       COUNT(EVENT_TYPE_NORMALIZED) AS has_normalized
+FROM FILING_SIGNALS;
+-- Should show: 376 signals, ~44% with revenue, guidance varies, 100% normalized
 
-## Phase 3: Enrichment (~2 minutes)
-
-### Worksheet 3: SIC Reference Data + Ticker Enrichment
-
-Paste and run in order:
-
-1. `sql/00_config.sql`
-2. `sql/04_enrichment/00_sic_reference_data.sql` — Creates and populates SIC_CODES table (494 industry codes)
-3. `sql/04_enrichment/01_ticker_enrichment.sql` — Creates ENRICH_TICKERS SP
-
-Then run ticker enrichment (for Quick Start, one batch is enough):
-
-```sql
--- Enrich tickers for loaded filings (run once for Quick Start)
-CALL ENRICH_TICKERS(500, '0000000000', $config_user_agent);
-```
-
-Then run the metadata backfill:
-
-4. `sql/04_enrichment/02_metadata_backfill.sql` — Populates INDUSTRY_SECTOR + INDUSTRY_TITLE + PERIOD_OF_REPORT
-
-**Verify:**
-```sql
-SELECT INDUSTRY_SECTOR, COUNT(*) FROM FILING_INDEX GROUP BY 1 ORDER BY 2 DESC;
--- Should show 8 sectors: Finance, Technology, Life Sciences, Manufacturing, etc.
-```
-
-**Note on PERIOD_OF_REPORT:** The feed archive loader (`LOAD_FEED_ARCHIVE`) stores the primary document content in `CONTENT_TEXT`, not the full SEC submission wrapper. The `CONFORMED PERIOD OF REPORT` metadata lives in the submission header which is parsed during download but may not persist to `CONTENT_TEXT` for all filings. If `PERIOD_OF_REPORT` is NULL after backfill, this is expected for feed-loaded data. It does not affect agent functionality — `SIGNAL_DATE` (the SEC filing receipt date) is the primary time dimension used by both Cortex Search and the semantic view.
-
-```sql
-SELECT COUNT(*) AS total, COUNT(PERIOD_OF_REPORT) AS has_period FROM FILING_INDEX;
--- Quick Start: may show 0 has_period — this is normal for feed-loaded data
-```
-
----
-
-## Phase 4: Processing (~10 minutes for Quick Start)
-
-### Worksheet 4: UDFs + Chunking + Signal Extraction
-
-Paste and run in order:
-
-1. `sql/00_config.sql`
-2. `sql/03_processing/01_text_cleaning_udf.sql` — Creates CLEAN_TEXT UDF
-3. `sql/03_processing/02_chunking_udf.sql` — Creates CHUNK_FILING UDF
-4. `sql/03_processing/03_chunking_pipeline.sql` — Runs chunking (all 3 sessions execute sequentially in one worksheet)
-
-Wait for chunking to complete, then:
-
-5. `sql/03_processing/04_signal_extraction.sql` — Runs AI signal extraction (3 sessions sequentially)
-
-**Note:** Signal extraction uses AI_EXTRACT and takes ~5 minutes for 376 filings. Metrics and guidance extraction (AI_COMPLETE) add another ~6 minutes. These manual scripts are for Quick Start only. For production or larger corpora, use the Processing Task DAG (Phase 6b) which handles chunking, signals, metrics, guidance, normalization, and search refresh automatically.
-
-After signals are extracted, propagate industry data to downstream tables:
-
-```sql
--- Propagate INDUSTRY_SECTOR to chunks
-UPDATE FILING_CHUNKS fc
-SET INDUSTRY_SECTOR = fi.INDUSTRY_SECTOR, INDUSTRY_TITLE = fi.INDUSTRY_TITLE
-FROM FILING_INDEX fi WHERE fc.ACCESSION_NO = fi.ACCESSION_NO AND fi.INDUSTRY_SECTOR IS NOT NULL;
-
--- Propagate INDUSTRY_SECTOR to signals
-UPDATE FILING_SIGNALS fs
-SET INDUSTRY_SECTOR = fi.INDUSTRY_SECTOR, INDUSTRY_TITLE = fi.INDUSTRY_TITLE
-FROM FILING_INDEX fi WHERE fs.ACCESSION_NO = fi.ACCESSION_NO AND fi.INDUSTRY_SECTOR IS NOT NULL;
-```
-
-**Verify:**
-```sql
-SELECT COUNT(*) AS chunks FROM FILING_CHUNKS;  -- ~54,000 for Quick Start
-SELECT COUNT(*) AS signals FROM FILING_SIGNALS; -- ~376
 SELECT INDUSTRY_SECTOR, COUNT(*) FROM FILING_SIGNALS GROUP BY 1 ORDER BY 2 DESC;
+-- Should show 8 sectors: Finance, Technology, Life Sciences, Manufacturing, etc.
 ```
 
 ---
@@ -231,11 +206,15 @@ SHOW CORTEX SEARCH SERVICES IN SCHEMA;
 Then deploy the agent:
 
 4. `sql/06_agent/01_agent_deployment.sql` — Deploys agent using dynamic SQL (no manual editing needed)
+5. `sql/05_serving/04_serving_task_dag.sql` — Creates the Serving DAG (T_SERVING_ROOT) for automated semantic view + agent redeployment. Required by TRIGGER_PROCESS_FILINGS_FULL.
 
 **Verify:**
 ```sql
 SHOW AGENTS IN SCHEMA;
 -- Should show SEC_FILING_AGENT
+
+SHOW TASKS LIKE 'T_SERVING%' IN SCHEMA;
+-- Should show T_SERVING_ROOT, T_RECREATE_SEMANTIC_VIEW, T_REDEPLOY_AGENT, T_SERVING_FINALIZER
 ```
 
 ---
@@ -258,7 +237,7 @@ SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 
 ---
 
-## Done! Quick Start Complete (~20-25 minutes total, or ~10-12 with limit=100)
+## Done! Quick Start Complete (~15 minutes total)
 
 You now have a working SEC Filing Intelligence agent with:
 - 376 filings from Feb 21, 2025
@@ -282,23 +261,24 @@ Paste and run each script in a **separate worksheet** (each contains BEGIN...END
 2. **Worksheet B:** `sql/00_config.sql` + `sql/04_enrichment/03_enrichment_task_dag.sql` — Ticker enrichment + industry backfill
 3. **Worksheet C:** `sql/00_config.sql` + `sql/03_processing/07_signal_excerpt_view.sql` — **Deploy FIRST** (V_SIGNAL_EXCERPT view, required by signal extraction SPs)
 4. **Worksheet D:** `sql/00_config.sql` + `sql/03_processing/05_processing_task_dag.sql` — Chunking, signals, metrics, normalization, search refresh
-5. **Worksheet E:** `sql/00_config.sql` + `sql/05_serving/04_serving_task_dag.sql` — Semantic view + agent redeployment (manual trigger only)
 
 **Additional SPs (run after DAGs):**
 
-6. **Worksheet F:** `sql/00_config.sql` + `sql/02_ingestion/06_feed_gap_filler.sql` — Gap-filler SPs (FILL_FEED_GAPS, VALIDATE_FEED_COMPLETENESS)
-7. **Worksheet G:** `sql/00_config.sql` + `sql/03_processing/06_process_single_filing.sql` — Spot-processing SPs (PREPARE/PROCESS/TRIGGER_PROCESS_FILINGS, REEXTRACT_SIGNALS)
+5. **Worksheet E:** `sql/00_config.sql` + `sql/02_ingestion/06_feed_gap_filler.sql` — Gap-filler SPs (FILL_FEED_GAPS, VALIDATE_FEED_COMPLETENESS)
+6. **Worksheet F:** `sql/00_config.sql` + `sql/03_processing/06_process_single_filing.sql` — Spot-processing SPs (PREPARE/PROCESS/TRIGGER_PROCESS_FILINGS, TRIGGER_PROCESS_FILINGS_FULL, REEXTRACT_SIGNALS)
 
 **Important:** `07_signal_excerpt_view.sql` (Worksheet C) MUST be deployed before `05_processing_task_dag.sql` (Worksheet D) — the signal extraction SPs reference the `V_SIGNAL_EXCERPT` view.
 
 **Verify:**
 ```sql
 SHOW TASKS IN SCHEMA;
--- Should show T_FEED_INGEST_ROOT, T_ENRICH_ROOT, T_PROCESSING_ROOT, T_SERVING_ROOT and their children
+-- Should show T_FEED_INGEST_ROOT, T_ENRICH_ROOT, T_PROCESSING_ROOT and their children
+-- (T_SERVING_ROOT was deployed in Phase 5)
 SHOW VIEWS LIKE 'V_SIGNAL_EXCERPT';
 -- Should show the view
 SHOW PROCEDURES LIKE 'FILL_FEED_GAPS';
 SHOW PROCEDURES LIKE 'PROCESS_FILINGS';
+SHOW PROCEDURES LIKE 'TRIGGER_PROCESS_FILINGS_FULL';
 SHOW PROCEDURES LIKE 'REEXTRACT_SIGNALS';
 ```
 

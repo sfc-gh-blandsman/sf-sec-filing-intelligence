@@ -209,6 +209,81 @@ sql/06_agent/01_agent_deployment.sql        ← Deploys agent
 
 ---
 
+## PROGRAMMATIC DEPLOYMENT GUIDE
+
+For AI agents (Cortex Code, Claude Code, Cursor) or SQL connectors (Python connector, REST API) deploying this project. The core challenge: SQL connectors split multi-statement SQL on semicolons, which breaks `CREATE TASK` and `CREATE PROCEDURE` with `BEGIN...END` scripting blocks.
+
+### Error Patterns and Solutions
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `unexpected '<EOF>'` | Connector split `BEGIN...END` on internal `;` | Wrap in `EXECUTE IMMEDIATE $$ ... $$` |
+| `statement count N did not match desired 1` | Same — multiple semicolons detected | Use single-statement execution or `EXECUTE IMMEDIATE $$` |
+| `Session variable '$config_X' does not exist` | Session variables don't persist across calls | Replace `$config_*` with literal values before execution |
+| `Property 'handler' must be specified` | Python SP missing explicit HANDLER | Add `HANDLER = 'function_name'` (Snowsight infers it; connectors don't) |
+| `Cannot perform CREATE TASK. No current database.` | Context lost after failed statement | Use fully-qualified names: `DB.SCHEMA.OBJECT` |
+| `Invalid finalized root task` | Creating finalizer while root is started | Suspend root → create finalizer → resume root |
+| `Unable to update graph with root task not suspended` | Modifying child while root is active | Suspend root → modify child → resume root |
+
+### File Deployment Difficulty
+
+| File | Difficulty | Notes |
+|------|-----------|-------|
+| `01_database_and_schema.sql` | Easy | Pure DDL |
+| `02_warehouses.sql` | Easy | Pure DDL + compute pool |
+| `03_external_access.sql` | Easy | Must execute in order (rule before EAI) |
+| `04_email_integration.sql` | Easy | Single DDL |
+| `04_feed_archive_loader.sql` | Easy | Python SPs with `$$` — works as-is |
+| `05_feed_ingestion_dag.sql` | Easy | Tasks have simple CALL bodies |
+| `00_sic_reference_data.sql` | Easy | DDL + INSERT VALUES |
+| `01_ticker_enrichment.sql` | Easy | Python SPs with `$$` |
+| `01_text_cleaning_udf.sql` | Easy | Python UDF |
+| `02_chunking_udf.sql` | Easy | Python UDF |
+| `07_signal_excerpt_view.sql` | Easy | Single CREATE VIEW |
+| `05_processing_task_dag.sql` | Hard | Tasks with `BEGIN...END` bodies — use `EXECUTE IMMEDIATE $$` per task |
+| `06_process_single_filing.sql` | Medium | Python SP + SQL SPs — works with `$$` |
+| `04_serving_task_dag.sql` | Easy | `REDEPLOY_AGENT()` SP eliminates nested `$$` issue |
+| `01_cortex_search.sql` | Easy | Single DDL |
+| `02_semantic_view.sql` | Easy | Single DDL |
+| `01_agent_deployment.sql` | Easy | Direct `CREATE AGENT ... FROM SPECIFICATION $$` works |
+| `02_eval_framework.sql` | Hard | Complex nested SPs — deploy from Snowsight |
+
+### The EXECUTE IMMEDIATE $$ Pattern
+
+For any `CREATE TASK` or `CREATE PROCEDURE` with `BEGIN...END`:
+
+```sql
+EXECUTE IMMEDIATE
+$$
+CREATE OR REPLACE TASK FULLY.QUALIFIED.TASK_NAME
+    WAREHOUSE = MY_WH
+    AFTER FULLY.QUALIFIED.PARENT
+AS
+BEGIN
+    UPDATE table SET col = val WHERE cond;
+    RETURN 'done';
+END;
+$$
+```
+
+Rules:
+- Fully qualify ALL object names (tasks, predecessors, FINALIZE references)
+- No `$$` inside the body (use string concatenation for dynamic SQL)
+- Suspend root task before creating finalizer tasks
+- Resume all child tasks before resuming root (leaf-to-root order)
+
+### Quick Start for Programmatic Deployment
+
+After infrastructure (Phase 1), deploy all SPs then call `QUICK_START`:
+
+```sql
+CALL QUICK_START('2025-02-21');
+```
+
+This creates a monitorable dynamic task DAG that handles: ingestion → enrichment → chunking → signal extraction → metrics → guidance → normalization → search refresh → serving update. Returns immediately.
+
+---
+
 ## AVAILABLE SKILLS
 
 Use the `skill` tool to invoke these when working on this project:

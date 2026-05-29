@@ -14,6 +14,11 @@
 --     Creates a dynamic task that calls PREPARE then PROCESS, emails on done.
 --     Returns immediately with task name.
 --
+--   TRIGGER_PROCESS_FILINGS_FULL(accessions[] | NULL)  — SQL SP (full pipeline)
+--     Creates a dynamic task DAG: prepare → process → metrics → guidance →
+--     normalize → propagate → search → serving → email. Self-cleans on completion.
+--     Pass NULL to process all PENDING filings.
+--
 -- Backward-compatible wrappers:
 --   PROCESS_SINGLE_FILING(accession)  — calls PROCESS_FILINGS([accession])
 --   TRIGGER_PROCESS_FILING(accession) — calls TRIGGER_PROCESS_FILINGS([accession])
@@ -25,6 +30,9 @@
 --   -- Multiple filings (async with email):
 --   CALL TRIGGER_PROCESS_FILINGS(ARRAY_CONSTRUCT('acc1', 'acc2', 'acc3'));
 --
+--   -- Full pipeline for all pending (async, self-cleaning DAG):
+--   CALL TRIGGER_PROCESS_FILINGS_FULL(NULL);
+--
 --   -- Synchronous (blocks until done):
 --   CALL PREPARE_FILINGS(ARRAY_CONSTRUCT('0000320193-25-000079'));
 --   CALL PROCESS_FILINGS(ARRAY_CONSTRUCT('0000320193-25-000079'));
@@ -34,6 +42,8 @@
 --   - CLEAN_TEXT UDF, CHUNK_FILING UDF
 --   - SIC_CODES reference table
 --   - Cortex Search service
+--   - EXTRACT_KEY_METRICS_BATCH, EXTRACT_FORWARD_GUIDANCE_BATCH SPs
+--   - T_SERVING_ROOT task (optional, for serving layer update)
 --   - _CFG() function, email integration
 --
 -- Run 00_config.sql first to set session variables.
@@ -511,3 +521,354 @@ BEGIN
            :v_extracted::VARCHAR || ' new signals created (section_targeted method).';
 END;
 $$;
+
+
+-- =============================================================================
+-- SP: TRIGGER_PROCESS_FILINGS_FULL (Full Pipeline — Dynamic Task DAG)
+-- =============================================================================
+-- Creates a self-cleaning dynamic task DAG that runs the ENTIRE pipeline:
+--   prepare → process → metrics → guidance → normalize → propagate → search → serving
+--
+-- Unlike TRIGGER_PROCESS_FILINGS (which only runs prepare + process), this SP
+-- runs all enrichment, extraction, normalization, propagation, and serving steps.
+--
+-- The DAG self-cleans: the finalizer task drops all dynamic tasks on completion.
+--
+-- Usage:
+--   -- Process specific filings (full pipeline):
+--   CALL TRIGGER_PROCESS_FILINGS_FULL(ARRAY_CONSTRUCT('acc1', 'acc2'));
+--
+--   -- Process ALL pending filings (full pipeline):
+--   CALL TRIGGER_PROCESS_FILINGS_FULL(NULL);
+--
+-- DAG Structure:
+--   <dag_name>_ROOT (root — never-fire schedule)
+--   ├── <dag_name>_PREPARE     (CALL PREPARE_FILINGS, warehouse = ingest)
+--   ├── <dag_name>_PROCESS     (CALL PROCESS_FILINGS, after PREPARE, warehouse = build)
+--   ├── <dag_name>_METRICS     (CALL EXTRACT_KEY_METRICS_BATCH, after PROCESS, warehouse = build)
+--   ├── <dag_name>_GUIDANCE    (CALL EXTRACT_FORWARD_GUIDANCE_BATCH, after PROCESS, warehouse = build)
+--   ├── <dag_name>_NORMALIZE   (inline UPDATE, after PROCESS, warehouse = steady-state)
+--   ├── <dag_name>_PROPAGATE   (inline UPDATEs, after METRICS+NORMALIZE, warehouse = steady-state)
+--   ├── <dag_name>_SEARCH      (ALTER CORTEX SEARCH REFRESH, after PROPAGATE, warehouse = steady-state)
+--   ├── <dag_name>_SERVING     (EXECUTE TASK T_SERVING_ROOT, after SEARCH, warehouse = steady-state)
+--   └── <dag_name>_FINALIZER   (FINALIZE = ROOT: emails + self-cleans)
+--
+-- Dependencies:
+--   - PREPARE_FILINGS, PROCESS_FILINGS SPs (this file)
+--   - EXTRACT_KEY_METRICS_BATCH, EXTRACT_FORWARD_GUIDANCE_BATCH SPs (05_processing_task_dag.sql)
+--   - T_SERVING_ROOT task (04_serving_task_dag.sql, optional — skipped if not found)
+--   - _CFG() function, email integration
+--
+-- Run 00_config.sql first to set session variables.
+-- =============================================================================
+
+CREATE OR REPLACE PROCEDURE TRIGGER_PROCESS_FILINGS_FULL(
+    P_ACCESSIONS ARRAY DEFAULT NULL,
+    P_FEED_DATE VARCHAR DEFAULT NULL
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    dag_name VARCHAR;
+    acc_str VARCHAR;
+    acc_array_sql VARCHAR;
+    wh_build VARCHAR;
+    wh_ingest VARCHAR;
+    wh_steady VARCHAR;
+    db_name VARCHAR;
+    schema_name VARCHAR;
+    svc_name VARCHAR;
+    email_int VARCHAR;
+    email_to VARCHAR;
+    user_agent VARCHAR;
+    prepare_after VARCHAR;
+    filing_count INT;
+BEGIN
+    -- Resolve config values
+    wh_build := _CFG('warehouse_build');
+    wh_ingest := _CFG('warehouse_ingest');
+    wh_steady := _CFG('warehouse');
+    db_name := _CFG('database');
+    schema_name := _CFG('schema');
+    svc_name := _CFG('search_service');
+    email_int := _CFG('email_integration');
+    email_to := _CFG('email_recipient');
+    user_agent := _CFG('user_agent');
+
+    -- Generate unique DAG name
+    dag_name := 'PROCESS_FULL_' || TO_VARCHAR(CURRENT_TIMESTAMP(), 'YYYYMMDD_HH24MISS');
+
+    -- =========================================================================
+    -- ROOT TASK (never-fire schedule)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_ROOT
+            WAREHOUSE = ' || :wh_steady || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            SCHEDULE = ''USING CRON 0 0 29 2 * UTC''
+            COMMENT = ''Full processing DAG''
+        AS SELECT 1';
+
+    -- =========================================================================
+    -- INGEST (optional — only if P_FEED_DATE provided)
+    -- =========================================================================
+    IF (:P_FEED_DATE IS NOT NULL) THEN
+        EXECUTE IMMEDIATE '
+            CREATE TASK ' || :dag_name || '_INGEST
+                WAREHOUSE = ' || :wh_ingest || '
+                USER_TASK_TIMEOUT_MS = 172800000
+                COMMENT = ''Ingest feed archive for ' || :P_FEED_DATE || '''
+                AFTER ' || :dag_name || '_ROOT
+            AS CALL LOAD_FEED_ARCHIVE(''' || :P_FEED_DATE || ''', ''' || :user_agent || ''')';
+        prepare_after := :dag_name || '_INGEST';
+    ELSE
+        prepare_after := :dag_name || '_ROOT';
+    END IF;
+
+    -- Default to all PENDING filings if NULL/empty
+    IF (:P_ACCESSIONS IS NULL OR ARRAY_SIZE(:P_ACCESSIONS) = 0) THEN
+        -- If we're ingesting, accessions won't exist yet — use NULL to process all PENDING at runtime
+        acc_array_sql := 'NULL';
+    ELSE
+        -- Build ARRAY_CONSTRUCT string from input array
+        SELECT LISTAGG('''' || VALUE::VARCHAR || '''', ',') INTO :acc_str
+        FROM TABLE(FLATTEN(INPUT => :P_ACCESSIONS));
+        acc_array_sql := 'ARRAY_CONSTRUCT(' || :acc_str || ')';
+    END IF;
+
+    -- =========================================================================
+    -- PREPARE (download content + enrich ticker + fix industry)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_PREPARE
+            WAREHOUSE = ' || :wh_ingest || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Prepare filings: download + ticker + industry''
+            AFTER ' || :prepare_after || '
+        AS CALL PREPARE_FILINGS(' || :acc_array_sql || ')';
+
+    -- =========================================================================
+    -- PROCESS (chunk + signal extract + search refresh)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_PROCESS
+            WAREHOUSE = ' || :wh_build || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Process filings: chunk + signal extract''
+            AFTER ' || :dag_name || '_PREPARE
+        AS CALL PROCESS_FILINGS(' || :acc_array_sql || ')';
+
+    -- =========================================================================
+    -- METRICS (extract revenue, EPS, net income, YoY)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_METRICS
+            WAREHOUSE = ' || :wh_build || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Extract key financial metrics''
+            AFTER ' || :dag_name || '_PROCESS
+        AS CALL EXTRACT_KEY_METRICS_BATCH(500)';
+
+    -- =========================================================================
+    -- GUIDANCE (extract forward guidance statements)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_GUIDANCE
+            WAREHOUSE = ' || :wh_build || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Extract forward guidance''
+            AFTER ' || :dag_name || '_PROCESS
+        AS CALL EXTRACT_FORWARD_GUIDANCE_BATCH(500)';
+
+    -- =========================================================================
+    -- NORMALIZE (map EVENT_TYPE to 12 canonical categories)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_NORMALIZE
+            WAREHOUSE = ' || :wh_steady || '
+            USER_TASK_TIMEOUT_MS = 600000
+            COMMENT = ''Normalize event types to 12 categories''
+            AFTER ' || :dag_name || '_PROCESS
+        AS
+        BEGIN
+            UPDATE FILING_SIGNALS SET EVENT_TYPE_NORMALIZED = CASE
+                WHEN EVENT_TYPE IN (''Earnings'',''M&A'',''Leadership Change'',''Risk Disclosure'',''Guidance Update'',''Regulatory'',''Capital Markets'',''Bankruptcy'',''Annual Report'',''Quarterly Report'',''Current Report'',''Other'') THEN EVENT_TYPE
+                WHEN EVENT_TYPE ILIKE ''%acqui%'' OR EVENT_TYPE ILIKE ''%merger%'' OR EVENT_TYPE ILIKE ''%disposition%'' THEN ''M&A''
+                WHEN EVENT_TYPE ILIKE ''%change in control%'' OR EVENT_TYPE ILIKE ''%change of control%'' THEN ''M&A''
+                WHEN EVENT_TYPE ILIKE ''%leadership%'' OR EVENT_TYPE ILIKE ''%chief%'' OR EVENT_TYPE ILIKE ''%officer%'' THEN ''Leadership Change''
+                WHEN EVENT_TYPE ILIKE ''%regulation%'' OR EVENT_TYPE ILIKE ''%compliance%'' OR EVENT_TYPE ILIKE ''%sanction%'' OR EVENT_TYPE ILIKE ''%mine safety%'' OR EVENT_TYPE ILIKE ''%ESG%'' OR EVENT_TYPE ILIKE ''%audit%'' OR EVENT_TYPE ILIKE ''%accountant%'' OR EVENT_TYPE ILIKE ''%accounting%'' THEN ''Regulatory''
+                WHEN EVENT_TYPE ILIKE ''%dividend%'' OR EVENT_TYPE ILIKE ''%issuance%'' OR EVENT_TYPE ILIKE ''%notes%'' OR EVENT_TYPE ILIKE ''%repurchase%'' OR EVENT_TYPE ILIKE ''%capital%'' OR EVENT_TYPE ILIKE ''%credit%'' OR EVENT_TYPE ILIKE ''%loan%'' OR EVENT_TYPE ILIKE ''%euro%'' THEN ''Capital Markets''
+                WHEN EVENT_TYPE ILIKE ''%guidance%'' OR EVENT_TYPE ILIKE ''%forward%look%'' OR EVENT_TYPE ILIKE ''%outlook%'' OR EVENT_TYPE ILIKE ''%update%'' THEN ''Guidance Update''
+                WHEN EVENT_TYPE ILIKE ''%risk%'' THEN ''Risk Disclosure''
+                WHEN EVENT_TYPE ILIKE ''%bankrupt%'' OR EVENT_TYPE ILIKE ''%shell%'' THEN ''Bankruptcy''
+                ELSE ''Other''
+            END WHERE EVENT_TYPE_NORMALIZED IS NULL;
+        END';
+
+    -- =========================================================================
+    -- PROPAGATE (industry + ticker from FILING_INDEX to chunks + signals)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_PROPAGATE
+            WAREHOUSE = ' || :wh_steady || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Propagate industry + ticker to downstream tables''
+            AFTER ' || :dag_name || '_METRICS, ' || :dag_name || '_NORMALIZE
+        AS
+        BEGIN
+            UPDATE FILING_CHUNKS fc SET INDUSTRY_SECTOR = fi.INDUSTRY_SECTOR, INDUSTRY_TITLE = fi.INDUSTRY_TITLE FROM FILING_INDEX fi WHERE fc.ACCESSION_NO = fi.ACCESSION_NO AND fi.INDUSTRY_SECTOR IS NOT NULL AND fc.INDUSTRY_SECTOR IS NULL;
+            UPDATE FILING_SIGNALS fs SET INDUSTRY_SECTOR = fi.INDUSTRY_SECTOR, INDUSTRY_TITLE = fi.INDUSTRY_TITLE FROM FILING_INDEX fi WHERE fs.ACCESSION_NO = fi.ACCESSION_NO AND fi.INDUSTRY_SECTOR IS NOT NULL AND fs.INDUSTRY_SECTOR IS NULL;
+            UPDATE FILING_CHUNKS fc SET TICKER = fi.TICKER FROM FILING_INDEX fi WHERE fc.ACCESSION_NO = fi.ACCESSION_NO AND fi.TICKER IS NOT NULL AND fc.TICKER IS NULL;
+            UPDATE FILING_SIGNALS fs SET TICKER = fi.TICKER FROM FILING_INDEX fi WHERE fs.ACCESSION_NO = fi.ACCESSION_NO AND fi.TICKER IS NOT NULL AND fs.TICKER IS NULL;
+        END';
+
+    -- =========================================================================
+    -- SEARCH (refresh Cortex Search service)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_SEARCH
+            WAREHOUSE = ' || :wh_steady || '
+            USER_TASK_TIMEOUT_MS = 3600000
+            COMMENT = ''Refresh Cortex Search service''
+            AFTER ' || :dag_name || '_PROPAGATE
+        AS
+        BEGIN
+            ALTER CORTEX SEARCH SERVICE ' || :db_name || '.' || :schema_name || '.' || :svc_name || ' RESUME INDEXING;
+            ALTER CORTEX SEARCH SERVICE ' || :db_name || '.' || :schema_name || '.' || :svc_name || ' REFRESH;
+        END';
+
+    -- =========================================================================
+    -- SERVING (trigger serving DAG if it exists)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_SERVING
+            WAREHOUSE = ' || :wh_steady || '
+            USER_TASK_TIMEOUT_MS = 172800000
+            COMMENT = ''Trigger serving layer update (semantic view + agent)''
+            AFTER ' || :dag_name || '_SEARCH
+        AS
+        BEGIN
+            LET serving_exists INT := 0;
+            SHOW TASKS LIKE ''T_SERVING_ROOT'' IN SCHEMA;
+            SELECT COUNT(*) INTO :serving_exists FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+            IF (:serving_exists > 0) THEN
+                EXECUTE TASK T_SERVING_ROOT;
+            END IF;
+        END';
+
+    -- =========================================================================
+    -- FINALIZER (email summary + self-clean)
+    -- =========================================================================
+    EXECUTE IMMEDIATE '
+        CREATE TASK ' || :dag_name || '_FINALIZER
+            WAREHOUSE = ' || :wh_steady || '
+            FINALIZE = ' || :dag_name || '_ROOT
+            COMMENT = ''Finalizer: email summary + drop dynamic tasks''
+        AS
+        BEGIN
+            LET total_signals INT;
+            LET with_revenue INT;
+            LET with_guidance INT;
+            LET with_normalized INT;
+
+            SELECT COUNT(*) INTO :total_signals FROM FILING_SIGNALS;
+            SELECT COUNT(REVENUE) INTO :with_revenue FROM FILING_SIGNALS;
+            SELECT COUNT(FORWARD_GUIDANCE) INTO :with_guidance FROM FILING_SIGNALS;
+            SELECT COUNT(EVENT_TYPE_NORMALIZED) INTO :with_normalized FROM FILING_SIGNALS;
+
+            LET msg VARCHAR := ''FULL PROCESSING PIPELINE COMPLETE'' || CHR(10) || CHR(10) ||
+                ''Filings processed: ' || ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ''' || CHR(10) ||
+                ''Total signals: '' || :total_signals::VARCHAR || CHR(10) ||
+                ''With revenue: '' || :with_revenue::VARCHAR || CHR(10) ||
+                ''With guidance: '' || :with_guidance::VARCHAR || CHR(10) ||
+                ''With normalized type: '' || :with_normalized::VARCHAR || CHR(10) ||
+                ''Search: refreshed'' || CHR(10) ||
+                ''Serving: updated'' || CHR(10) || CHR(10) ||
+                ''Timestamp: '' || CURRENT_TIMESTAMP()::VARCHAR;
+
+            IF ((SELECT VALUE FROM _PIPELINE_CONFIG WHERE KEY = ''enable_dag_emails'') = ''TRUE'') THEN
+                CALL SYSTEM$SEND_EMAIL(
+                    ''' || :email_int || ''',
+                    ''' || :email_to || ''',
+                    ''SEC Full Pipeline Complete (' || ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ' filings)'',
+                    :msg
+                );
+            END IF;
+
+            -- Self-clean: drop all dynamic tasks
+            DROP TASK IF EXISTS ' || :dag_name || '_FINALIZER;
+            DROP TASK IF EXISTS ' || :dag_name || '_SERVING;
+            DROP TASK IF EXISTS ' || :dag_name || '_SEARCH;
+            DROP TASK IF EXISTS ' || :dag_name || '_PROPAGATE;
+            DROP TASK IF EXISTS ' || :dag_name || '_NORMALIZE;
+            DROP TASK IF EXISTS ' || :dag_name || '_GUIDANCE;
+            DROP TASK IF EXISTS ' || :dag_name || '_METRICS;
+            DROP TASK IF EXISTS ' || :dag_name || '_PROCESS;
+            DROP TASK IF EXISTS ' || :dag_name || '_PREPARE;
+            DROP TASK IF EXISTS ' || :dag_name || '_INGEST;
+            DROP TASK IF EXISTS ' || :dag_name || '_ROOT;
+        END';
+
+    -- =========================================================================
+    -- RESUME all child tasks, then root, then execute
+    -- =========================================================================
+    IF (:P_FEED_DATE IS NOT NULL) THEN
+        EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_INGEST RESUME';
+    END IF;
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_PREPARE RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_PROCESS RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_METRICS RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_GUIDANCE RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_NORMALIZE RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_PROPAGATE RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_SEARCH RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_SERVING RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_FINALIZER RESUME';
+    EXECUTE IMMEDIATE 'ALTER TASK ' || :dag_name || '_ROOT RESUME';
+    EXECUTE IMMEDIATE 'EXECUTE TASK ' || :dag_name || '_ROOT';
+
+    LET desc_str VARCHAR := CASE
+        WHEN :P_FEED_DATE IS NOT NULL THEN 'feed_date=' || :P_FEED_DATE
+        WHEN :P_ACCESSIONS IS NOT NULL THEN ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ' filings'
+        ELSE 'all PENDING filings'
+    END;
+
+    RETURN 'Full pipeline DAG created and triggered: ' || :dag_name ||
+           ' (' || :desc_str || '). ' ||
+           'Monitor: SELECT NAME, STATE FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(' ||
+           'SCHEDULED_TIME_RANGE_START => DATEADD(''hour'', -24, CURRENT_TIMESTAMP()), RESULT_LIMIT => 20' ||
+           ')) WHERE NAME LIKE ''' || :dag_name || '%'' ORDER BY SCHEDULED_TIME DESC;';
+END;
+$$;
+
+
+-- =============================================================================
+-- SP: QUICK_START (One-call setup: ingest single day + full processing DAG)
+-- =============================================================================
+-- Convenience wrapper for first-time setup. Ingests one day of filings from
+-- SEC EDGAR feed archive, then triggers the full processing pipeline as a
+-- monitorable dynamic task DAG.
+--
+-- Usage:
+--   CALL QUICK_START();                    -- Uses default date (2025-02-21)
+--   CALL QUICK_START('2025-03-05');        -- Custom date
+--
+-- The SP returns immediately with a DAG name for monitoring.
+-- =============================================================================
+
+CREATE OR REPLACE PROCEDURE QUICK_START(P_DATE VARCHAR DEFAULT '2025-02-21')
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+BEGIN
+    CALL TRIGGER_PROCESS_FILINGS_FULL(NULL, :P_DATE);
+    LET result VARCHAR := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
+    RETURN 'Quick Start initiated for ' || :P_DATE || '. ' || :result;
+END;
+$$;
+

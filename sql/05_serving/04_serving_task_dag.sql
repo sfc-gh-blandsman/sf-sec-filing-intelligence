@@ -117,7 +117,85 @@ END;
 
 
 -- =============================================================================
--- Step 4: Redeploy Agent (dynamic SQL injects config into YAML)
+-- SP: REDEPLOY_AGENT (callable from task or interactive session)
+-- =============================================================================
+-- Extracted from task body so that T_REDEPLOY_AGENT can use a simple CALL.
+-- This eliminates the nested $$ problem (the YAML $$ is inside a string
+-- built via concatenation, not a literal $$ block within the SP body).
+
+CREATE OR REPLACE PROCEDURE REDEPLOY_AGENT()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    search_fqn VARCHAR;
+    sv_fqn VARCHAR;
+    wh_name VARCHAR;
+    agent_name VARCHAR;
+    ddl VARCHAR;
+BEGIN
+    search_fqn := _CFG('database') || '.' || _CFG('schema') || '.' || _CFG('search_service');
+    sv_fqn := _CFG('database') || '.' || _CFG('schema') || '.' || _CFG('semantic_view');
+    wh_name := _CFG('warehouse');
+    agent_name := _CFG('agent_name');
+
+    ddl := '
+CREATE OR REPLACE AGENT ' || :agent_name || '
+  COMMENT = ''SEC EDGAR filing research agent — search + analyst.''
+  FROM SPECIFICATION
+$$
+models:
+  orchestration: claude-opus-4-7
+orchestration:
+  budget:
+    seconds: 1800
+    tokens: 400000
+instructions:
+  orchestration: |
+    You are SEC Filing Analyst. Use filing_semantic_search for text/quotes, filing_analyst for counts/trends.
+    Filter columns: filed_at (YYYY-MM-DD), form_type, company_name, ticker, section_name, period_of_report, industry_sector, industry_title
+    Industry sectors: Technology, Life Sciences, Finance, Real Estate & Construction, Energy & Transportation, Manufacturing, Trade & Services, Crypto Assets, Other
+    "Healthcare" = "Life Sciences". "Financial Services" = "Finance".
+    IMPORTANT: filed_at is the correct filter column name (NOT filed_date). Use YYYY-MM-DD format.
+    NEVER quote text not in a tool result. If search returns empty, say so.
+  response: |
+    Cite every claim: [Company] [Form] filed [date]. Use markdown tables for aggregates.
+tools:
+  - tool_spec:
+      type: cortex_search
+      name: filing_semantic_search
+      description: Semantic search over SEC filing text. Filter by filed_at, form_type, company_name, ticker, section_name, period_of_report, industry_sector, industry_title.
+  - tool_spec:
+      type: cortex_analyst_text_to_sql
+      name: filing_analyst
+      description: |
+        Structured analytics over filing signals.
+        Dimensions: company_name, ticker, form_type, event_type, sentiment, industry_sector, industry_title, is_amendment, signal_date, period_of_report.
+        Metrics: filing_count, positive_signals, negative_signals, earnings_count, ma_count, risk_disclosure_count, leadership_change_count, guidance_count, amendment_count, negative_sentiment_pct.
+        Facts: revenue, net_income, eps_normalized, yoy_change, guidance_normalized.
+tool_resources:
+  filing_semantic_search:
+    search_service: ' || :search_fqn || '
+    max_results: 20
+    id_column: CHUNK_ID
+    title_column: COMPANY_NAME
+  filing_analyst:
+    semantic_view: ' || :sv_fqn || '
+    execution_environment:
+      type: warehouse
+      warehouse: ' || :wh_name || '
+$$';
+
+    EXECUTE IMMEDIATE :ddl;
+    RETURN 'Agent redeployed: ' || :agent_name || ' (search=' || :search_fqn || ', analyst=' || :sv_fqn || ')';
+END;
+$$;
+
+
+-- =============================================================================
+-- Step 4: Redeploy Agent (simple CALL — all logic in REDEPLOY_AGENT SP)
 -- =============================================================================
 
 CREATE OR REPLACE TASK T_REDEPLOY_AGENT
@@ -125,62 +203,7 @@ CREATE OR REPLACE TASK T_REDEPLOY_AGENT
     USER_TASK_TIMEOUT_MS = 172800000
     COMMENT = 'Redeploys Cortex Agent with current config values'
     AFTER T_RECREATE_SEMANTIC_VIEW
-AS
-BEGIN
-    LET search_fqn VARCHAR := _CFG('database') || '.' || _CFG('schema') || '.' || _CFG('search_service');
-    LET sv_fqn VARCHAR := _CFG('database') || '.' || _CFG('schema') || '.' || _CFG('semantic_view');
-    LET wh_name VARCHAR := _CFG('warehouse');
-    LET agent_name VARCHAR := _CFG('agent_name');
-
-    -- Use the same dynamic SQL pattern as 01_agent_deployment.sql
-    -- (abbreviated spec for task context — full spec in 06_agent/01_agent_deployment.sql)
-    EXECUTE IMMEDIATE '
-    CREATE OR REPLACE AGENT ' || :agent_name || '
-      COMMENT = ''SEC EDGAR filing research agent — search + analyst.''
-      FROM SPECIFICATION
-    $$
-    models:
-      orchestration: claude-opus-4-7
-    orchestration:
-      budget:
-        seconds: 1800
-        tokens: 400000
-    instructions:
-      orchestration: |
-        You are SEC Filing Analyst. Use filing_semantic_search for text/quotes, filing_analyst for counts/trends.
-        Filter columns: filed_at (YYYY-MM-DD), form_type, company_name, ticker, section_name, period_of_report, industry_sector, industry_title
-        Industry sectors: Technology, Life Sciences, Finance, Real Estate & Construction, Energy & Transportation, Manufacturing, Trade & Services, Crypto Assets, Other
-        "Healthcare" = "Life Sciences". "Financial Services" = "Finance".
-      response: |
-        Cite every claim: [Company] [Form] filed [date]. Use markdown tables for aggregates.
-    tools:
-      - tool_spec:
-          type: cortex_search
-          name: filing_semantic_search
-          description: Semantic search over SEC filing text. Filter by filed_at, form_type, company_name, ticker, section_name, period_of_report, industry_sector, industry_title.
-      - tool_spec:
-          type: cortex_analyst_text_to_sql
-          name: filing_analyst
-          description: |
-            Structured analytics over filing signals.
-            Dimensions: company_name, ticker, form_type, event_type, sentiment, industry_sector, industry_title, is_amendment, signal_date, period_of_report.
-            Metrics: filing_count, positive_signals, negative_signals, earnings_count, ma_count, risk_disclosure_count, leadership_change_count, guidance_count, amendment_count, negative_sentiment_pct.
-            Facts: revenue, net_income, eps_normalized, yoy_change, guidance_normalized.
-    tool_resources:
-      filing_semantic_search:
-        search_service: ' || :search_fqn || '
-        max_results: 20
-        id_column: CHUNK_ID
-        title_column: COMPANY_NAME
-      filing_analyst:
-        semantic_view: ' || :sv_fqn || '
-        execution_environment:
-          type: warehouse
-          warehouse: ' || :wh_name || '
-    $$';
-
-    RETURN 'Agent redeployed: ' || :agent_name;
-END;
+AS CALL REDEPLOY_AGENT();
 
 
 -- =============================================================================
