@@ -1985,13 +1985,6 @@ def render_research_explorer():
         st.markdown(pills_html, unsafe_allow_html=True)
         st.write("")  # spacer
 
-        # Show Cortex Search queries used
-        search_queries_display = st.session_state.get("re_search_queries", [])
-        if search_queries_display:
-            with st.expander(f"Cortex Search Queries ({len(search_queries_display)} calls)"):
-                for i, sq in enumerate(search_queries_display):
-                    st.code(json.dumps(sq, indent=2), language="json")
-
         if mode == "Excerpts":
             # Group by company
             df_results = pd.DataFrame(results)
@@ -2026,6 +2019,13 @@ def render_research_explorer():
                     st.text(r["Excerpt"][:2000])
                     st.divider()
 
+            # Show Cortex Search queries used
+            search_queries_display = st.session_state.get("re_search_queries", [])
+            if search_queries_display:
+                with st.expander(f"Cortex Search Queries ({len(search_queries_display)} calls)"):
+                    for i, sq in enumerate(search_queries_display):
+                        st.code(json.dumps(sq, indent=2), language="json")
+
         elif mode == "Summarized":
             st.subheader("Per-Company Summaries")
             # Group by ticker (include source metadata + chunk text)
@@ -2044,6 +2044,13 @@ def render_research_explorer():
                     "chunk_preview": r.get("Excerpt", "")[:200],
                     "chunk_full": r.get("Excerpt", "")[:2000],
                 })
+
+            # Show Cortex Search queries used
+            search_queries_display = st.session_state.get("re_search_queries", [])
+            if search_queries_display:
+                with st.expander(f"Cortex Search Queries ({len(search_queries_display)} calls)"):
+                    for i, sq in enumerate(search_queries_display):
+                        st.code(json.dumps(sq, indent=2), language="json")
 
             for ticker, data in by_ticker.items():
                 context = "\n\n".join(data["excerpts"][:5])
@@ -2103,6 +2110,13 @@ def render_research_explorer():
                 with st.spinner("Generating comparison..."):
                     comparison = cortex_complete(research_model, prompt)
                 st.markdown(comparison)
+
+                # Show Cortex Search queries used
+                search_queries_display = st.session_state.get("re_search_queries", [])
+                if search_queries_display:
+                    with st.expander(f"Cortex Search Queries ({len(search_queries_display)} calls)"):
+                        for i, sq in enumerate(search_queries_display):
+                            st.code(json.dumps(sq, indent=2), language="json")
 
                 with st.expander("LLM Prompt"):
                     st.code(prompt, language=None)
