@@ -42,10 +42,17 @@ All account-specific values live in `sql/00_config.sql` (gitignored). Copy from 
 | `SEC_FILING_ANALYTICS` | Semantic View | Aggregate analytics for Cortex Analyst (live query, no materialization) |
 | `SEC_FILING_AGENT` | Cortex Agent | 2-tool agent (search + analyst), claude-opus-4-7 orchestrator |
 | `SEC_FILING_DASHBOARD` | Streamlit | 7-tab monitoring dashboard |
+| `V_SIGNAL_EXCERPT` | View | Section-targeted excerpt builder for AI_EXTRACT (shared by DAG + spot-processing) |
 | `EXPLORER_RESULTS` | Table | Batch research explorer results |
-| `_FEED_INGEST_LOG` | Table | Feed ingestion progress tracking |
+| `_FEED_INGEST_LOG` | Table | Feed ingestion progress tracking (statuses: DONE, PARTIAL, INCOMPLETE, SKIPPED_403, SKIPPED_404) |
 | `_PIPELINE_CONFIG` | Table | Runtime configuration for task DAGs |
 | `EVAL_RESULTS` | Table | Materialized agent evaluation results |
+| `FILL_FEED_GAPS` | SP | Tier-2 gap filler: downloads missing filings individually from EDGAR daily index |
+| `VALIDATE_FEED_COMPLETENESS` | SP | Audit feed completeness across year ranges (compares vs EDGAR daily index) |
+| `PREPARE_FILINGS` | SP (Python) | Downloads content + enriches ticker + fixes industry for array of accessions |
+| `PROCESS_FILINGS` | SP (SQL) | Chunks + signal-extracts + search refresh for array of accessions |
+| `TRIGGER_PROCESS_FILINGS` | SP (SQL) | Async wrapper: creates dynamic task, emails on completion |
+| `REEXTRACT_SIGNALS` | SP (SQL) | Force re-extract signals using section-targeted method |
 
 ---
 
@@ -69,13 +76,16 @@ sf-sec-filing-intelligence/
 │   │   ├── 01_load_metadata.sql       ← LOAD_EDGAR_METADATA SP (legacy, master.gz)
 │   │   ├── 02_download_filings.sql    ← DOWNLOAD_FILING_BATCH SP (legacy, per-filing)
 │   │   ├── 04_feed_archive_loader.sql ← LOAD_FEED_ARCHIVE + LOAD_FEED_DATE_RANGE SPs (primary)
-│   │   └── 05_feed_ingestion_dag.sql  ← Feed DAG (12 parallel months, multi-year loop)
+│   │   ├── 05_feed_ingestion_dag.sql  ← Feed DAG (12 parallel months, multi-year loop)
+│   │   └── 06_feed_gap_filler.sql     ← FILL_FEED_GAPS + VALIDATE_FEED_COMPLETENESS (Tier-2 gap filling)
 │   ├── 03_processing/
 │   │   ├── 01_text_cleaning_udf.sql   ← CLEAN_TEXT UDF
 │   │   ├── 02_chunking_udf.sql        ← CHUNK_FILING UDF (section-aware, 1500/200)
 │   │   ├── 03_chunking_pipeline.sql   ← Reference: manual bulk chunking
 │   │   ├── 04_signal_extraction.sql   ← Reference: manual bulk extraction
-│   │   └── 05_processing_task_dag.sql ← Processing DAG (14 tasks, production)
+│   │   ├── 05_processing_task_dag.sql ← Processing DAG (14 tasks, production)
+│   │   ├── 06_process_single_filing.sql ← PREPARE/PROCESS/TRIGGER_PROCESS_FILINGS + REEXTRACT_SIGNALS
+│   │   └── 07_signal_excerpt_view.sql ← V_SIGNAL_EXCERPT (shared section-targeted excerpt logic)
 │   ├── 04_enrichment/
 │   │   ├── 00_sic_reference_data.sql  ← SIC_CODES reference table
 │   │   ├── 01_ticker_enrichment.sql   ← ENRICH_TICKERS SP (SEC API → ticker)

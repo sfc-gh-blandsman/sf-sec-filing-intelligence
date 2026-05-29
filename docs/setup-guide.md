@@ -260,15 +260,26 @@ Paste and run each script in a **separate worksheet** (each contains BEGIN...END
 
 1. **Worksheet A:** `sql/00_config.sql` + `sql/02_ingestion/05_feed_ingestion_dag.sql` — Feed ingestion (12 parallel monthly tasks, multi-year loop)
 2. **Worksheet B:** `sql/00_config.sql` + `sql/04_enrichment/03_enrichment_task_dag.sql` — Ticker enrichment + industry backfill
-3. **Worksheet C:** `sql/00_config.sql` + `sql/03_processing/05_processing_task_dag.sql` — Chunking, signals, metrics, normalization, search refresh
-4. **Worksheet D:** `sql/00_config.sql` + `sql/05_serving/04_serving_task_dag.sql` — Semantic view + agent redeployment (manual trigger only)
+3. **Worksheet C:** `sql/00_config.sql` + `sql/03_processing/07_signal_excerpt_view.sql` — **Deploy FIRST** (V_SIGNAL_EXCERPT view, required by signal extraction SPs)
+4. **Worksheet D:** `sql/00_config.sql` + `sql/03_processing/05_processing_task_dag.sql` — Chunking, signals, metrics, normalization, search refresh
+5. **Worksheet E:** `sql/00_config.sql` + `sql/05_serving/04_serving_task_dag.sql` — Semantic view + agent redeployment (manual trigger only)
 
-**Important:** Each DAG script must be run in its own worksheet with `sql/00_config.sql` at the top. The scripts contain `BEGIN...END` blocks that won't work if combined with other scripts in the same run.
+**Additional SPs (run after DAGs):**
+
+6. **Worksheet F:** `sql/00_config.sql` + `sql/02_ingestion/06_feed_gap_filler.sql` — Gap-filler SPs (FILL_FEED_GAPS, VALIDATE_FEED_COMPLETENESS)
+7. **Worksheet G:** `sql/00_config.sql` + `sql/03_processing/06_process_single_filing.sql` — Spot-processing SPs (PREPARE/PROCESS/TRIGGER_PROCESS_FILINGS, REEXTRACT_SIGNALS)
+
+**Important:** `07_signal_excerpt_view.sql` (Worksheet C) MUST be deployed before `05_processing_task_dag.sql` (Worksheet D) — the signal extraction SPs reference the `V_SIGNAL_EXCERPT` view.
 
 **Verify:**
 ```sql
 SHOW TASKS IN SCHEMA;
 -- Should show T_FEED_INGEST_ROOT, T_ENRICH_ROOT, T_PROCESSING_ROOT, T_SERVING_ROOT and their children
+SHOW VIEWS LIKE 'V_SIGNAL_EXCERPT';
+-- Should show the view
+SHOW PROCEDURES LIKE 'FILL_FEED_GAPS';
+SHOW PROCEDURES LIKE 'PROCESS_FILINGS';
+SHOW PROCEDURES LIKE 'REEXTRACT_SIGNALS';
 ```
 
 After deploying, the Pipeline Control tab in the Streamlit app can trigger and manage pipeline runs.
