@@ -58,12 +58,14 @@ After Phase 1 completes, **re-run `sql/00_config.sql`** to persist config values
 
 Deploy the Streamlit monitoring dashboard early so you can track pipeline progress from the start. The dashboard has 7 tabs: Pipeline, Data Quality, Filing Explorer (RAG), Research Explorer, Cost Monitor, Pipeline Control, and Agent Eval.
 
+**Prerequisites:** Phase 1 must be complete (PYPI_EAI is created by `03_external_access.sql` and is required for the container runtime to install packages like plotly).
+
 ### Worksheet 1b: Streamlit Dashboard
 
 Paste and run:
 
 1. `sql/00_config.sql`
-2. `sql/05_serving/05_streamlit_deploy.sql` — Creates stage + Streamlit app object
+2. `sql/05_serving/05_streamlit_deploy.sql` — Creates stage + Streamlit app object (with `EXTERNAL_ACCESS_INTEGRATIONS = (PYPI_EAI)` for package installs)
 
 Then upload the app files using ONE of these methods:
 

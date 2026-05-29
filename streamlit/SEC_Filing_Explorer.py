@@ -2017,7 +2017,7 @@ def render_research_explorer():
 
         elif mode == "Summarized":
             st.subheader("Per-Company Summaries")
-            # Group by ticker (include source metadata)
+            # Group by ticker (include source metadata + chunk text)
             by_ticker = {}
             for r in results:
                 key = r["Ticker"]
@@ -2030,6 +2030,8 @@ def render_research_explorer():
                     "form": r.get("Form Type", ""),
                     "section": r.get("Section", ""),
                     "link": r.get("EDGAR Link", ""),
+                    "chunk_preview": r.get("Excerpt", "")[:200],
+                    "chunk_full": r.get("Excerpt", "")[:2000],
                 })
 
             for ticker, data in by_ticker.items():
@@ -2039,15 +2041,19 @@ def render_research_explorer():
                     summary = cortex_complete(research_model, prompt)
                 st.markdown(f"### {data['company']} ({ticker})")
                 st.markdown(summary)
-                with st.expander(f"Sources ({len(data['sources'])} filings)"):
-                    for s in data["sources"]:
-                        link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
-                        st.caption(f"{s['form']} | Filed {s['filed']} | {s['section']} | `{s['accession']}`{link_md}")
+                with st.expander(f"Source Chunks ({len(data['sources'])} retrieved)"):
+                    for i, s in enumerate(data["sources"][:5]):
+                        link_md = f" — [EDGAR]({s['link']})" if s["link"] else ""
+                        section_label = f"**{s['section']}** | " if s["section"] else ""
+                        st.caption(f"{section_label}{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
+                        st.code(s["chunk_full"], language=None)
+                    if len(data["sources"]) > 5:
+                        st.caption(f"... and {len(data['sources']) - 5} more chunks")
                 st.divider()
 
         elif mode == "Compared":
             st.subheader("Cross-Company Comparison")
-            # Build comparison (include source metadata)
+            # Build comparison (include source metadata + chunk text)
             by_ticker = {}
             for r in results:
                 key = r["Ticker"]
@@ -2058,7 +2064,10 @@ def render_research_explorer():
                     "accession": r.get("Accession No", ""),
                     "filed": r.get("Filed Date", ""),
                     "form": r.get("Form Type", ""),
+                    "section": r.get("Section", ""),
                     "link": r.get("EDGAR Link", ""),
+                    "chunk_preview": r.get("Excerpt", "")[:200],
+                    "chunk_full": r.get("Excerpt", "")[:1500],
                 })
 
             if len(by_ticker) < 2:
@@ -2083,12 +2092,17 @@ def render_research_explorer():
                 st.markdown(comparison)
 
                 # Source citations for comparison
-                with st.expander("Source Filings Used in Comparison"):
+                with st.expander("Source Chunks Used in Comparison"):
                     for ticker, data in list(by_ticker.items())[:10]:
-                        st.markdown(f"**{data['company']} ({ticker})**")
-                        for s in data["sources"][:3]:
-                            link_md = f" — [View on EDGAR]({s['link']})" if s["link"] else ""
-                            st.caption(f"{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
+                        st.markdown(f"**{data['company']} ({ticker})** — {len(data['sources'])} chunks")
+                        for i, s in enumerate(data["sources"][:3]):
+                            link_md = f" — [EDGAR]({s['link']})" if s["link"] else ""
+                            section_label = f"**{s['section']}** | " if s["section"] else ""
+                            st.caption(f"{section_label}{s['form']} | Filed {s['filed']} | `{s['accession']}`{link_md}")
+                            st.code(s["chunk_full"], language=None)
+                        if len(data["sources"]) > 3:
+                            st.caption(f"... and {len(data['sources']) - 3} more chunks")
+                        st.divider()
 
     # -------------------------------------------------------------------------
     # Run for Entire Sector (isolated fragment — no full-page rerun on interaction)
