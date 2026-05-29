@@ -69,7 +69,7 @@ BEGIN
         -- Query 1: Sentiment overview
         query_text := 'What is the overall sentiment distribution for ' || :P_SECTOR || ' filings? Show counts by sentiment.';
         BEGIN
-            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
+            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT_RUN(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
             response := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
         EXCEPTION WHEN OTHER THEN response := 'ERROR: ' || SQLERRM; END;
         INSERT INTO EXPLORER_RESULTS (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE)
@@ -78,7 +78,7 @@ BEGIN
         -- Query 2: Key events
         query_text := 'What are the most common event types in ' || :P_SECTOR || ' 8-K filings?';
         BEGIN
-            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
+            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT_RUN(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
             response := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
         EXCEPTION WHEN OTHER THEN response := 'ERROR: ' || SQLERRM; END;
         INSERT INTO EXPLORER_RESULTS (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE)
@@ -87,7 +87,7 @@ BEGIN
         -- Query 3: Risk themes
         query_text := 'Find common risk factors in ' || :P_SECTOR || ' 10-K filings. What themes appear across multiple companies?';
         BEGIN
-            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
+            EXECUTE IMMEDIATE 'SELECT SNOWFLAKE.CORTEX.AGENT_RUN(''' || :agent_fqn || ''', ''' || REPLACE(:query_text, '''', '''''') || ''')';
             response := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));
         EXCEPTION WHEN OTHER THEN response := 'ERROR: ' || SQLERRM; END;
         INSERT INTO EXPLORER_RESULTS (RUN_ID, SECTOR, QUERY_TYPE, QUERY_TEXT, AGENT_RESPONSE)

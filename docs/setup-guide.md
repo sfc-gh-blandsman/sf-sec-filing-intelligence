@@ -226,13 +226,13 @@ SHOW AGENTS IN SCHEMA;
 
 ```sql
 -- Test search (qualitative)
-SELECT SNOWFLAKE.CORTEX.AGENT(
+SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
     $config_database || '.' || $config_schema || '.' || $config_agent_name,
     'What risk factors did pharmaceutical companies disclose in recent 10-K filings?'
 );
 
 -- Test analyst (structured)
-SELECT SNOWFLAKE.CORTEX.AGENT(
+SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
     $config_database || '.' || $config_schema || '.' || $config_agent_name,
     'What is the filing count by industry sector?'
 );
@@ -360,4 +360,4 @@ CALL DOWNLOAD_FILING_BATCH(100, '8-K', '2025-01-01', '2025-12-31', $config_user_
 | Streamlit "Packages not found" | Remove all version pins from environment.yml; use only package names without `==X.Y` |
 | Streamlit takes long to load | First load builds the environment (~30s); subsequent loads are fast |
 | Streamlit "invalid identifier" | Column names in ACCOUNT_USAGE views differ from regular tables — check actual schema |
-| `SNOWFLAKE.CORTEX.AGENT()` not found | Use the JSON invocation: `SELECT SNOWFLAKE.CORTEX.AGENT_RUN('<agent_name>', {'query': '...'})` as a fallback. Check that Cortex Agent is enabled on your account. |
+| `SNOWFLAKE.CORTEX.AGENT_RUN()` not found | Use the JSON invocation: `SELECT SNOWFLAKE.CORTEX.AGENT_RUN('<agent_name>', {'query': '...'})` as a fallback. Check that Cortex Agent is enabled on your account. |

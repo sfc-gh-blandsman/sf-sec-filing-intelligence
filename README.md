@@ -53,7 +53,7 @@ See `docs/diagrams/` for detailed draw.io diagrams (importable to LucidChart).
 
 4. Test the agent:
    ```sql
-   SELECT SNOWFLAKE.CORTEX.AGENT(
+   SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
        '<database>.<schema>.SEC_FILING_AGENT',
        'What risk factors did pharmaceutical companies disclose in recent 10-K filings?'
    );

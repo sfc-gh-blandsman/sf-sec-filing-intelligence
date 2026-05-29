@@ -38,17 +38,17 @@
 -- =============================================================================
 -- Paste 00_config.sql first, then:
 
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'What risk factors did pharmaceutical companies disclose in 2025 10-K filings?'
 -- );
 
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'How many 10-K filings had negative sentiment in Q1 2025?'
 -- );
 
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'What is the negative sentiment rate by industry sector?'
 -- );

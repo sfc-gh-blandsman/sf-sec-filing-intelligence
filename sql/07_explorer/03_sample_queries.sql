@@ -15,19 +15,19 @@ USE WAREHOUSE IDENTIFIER($config_warehouse);
 -- =============================================================================
 
 -- Basic search query
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'What risk factors did Apple disclose in their most recent 10-K?'
 -- );
 
 -- Analyst query
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'Show the top 5 industries by total filing count.'
 -- );
 
 -- Cross-tool query (analyst → search)
--- SELECT SNOWFLAKE.CORTEX.AGENT(
+-- SELECT SNOWFLAKE.CORTEX.AGENT_RUN(
 --     $config_database || '.' || $config_schema || '.' || $config_agent_name,
 --     'Which Technology companies had M&A events in 2022? Show details from their 8-K filings.'
 -- );
