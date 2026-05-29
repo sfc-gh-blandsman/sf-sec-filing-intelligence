@@ -484,7 +484,10 @@ BEGIN
                 SELECT STATUS INTO :day_status FROM _FEED_INGEST_LOG WHERE FEED_DATE = :cur_date;
             EXCEPTION WHEN OTHER THEN day_status := ''; END;
 
-            IF (:day_status IN ('DONE', 'INCOMPLETE', 'SKIPPED_404', 'SKIPPED_403')) THEN
+            IF (:cur_date > CURRENT_DATE()) THEN
+                -- Future date — no archive exists yet, skip without HTTP request
+                skipped := skipped + 1;
+            ELSEIF (:day_status IN ('DONE', 'INCOMPLETE', 'SKIPPED_404')) THEN
                 skipped := skipped + 1;
             ELSE
                 CALL LOAD_FEED_ARCHIVE(TO_VARCHAR(:cur_date, 'YYYY-MM-DD'), :USER_AGENT);
