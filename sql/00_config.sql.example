@@ -23,7 +23,9 @@ SET config_agent_model = 'claude-opus-4-7';
 SET config_ingest_start_year = 2025;
 SET config_ingest_end_year = 2025;
 SET config_quick_start_limit = 100;  -- Set to NULL for full download
--- Quick Start test date: 2025-02-21 (376 filings, ~15 min end-to-end)
+-- Quick Start test date: 2025-02-21 (376 filings)
+--   With limit=100: ~10-12 min end-to-end
+--   With limit=NULL (all 376): ~20-25 min end-to-end
 -- Set config_quick_start_limit = NULL for full year ingestion
 
 -- =============================================================================

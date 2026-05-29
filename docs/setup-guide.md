@@ -154,7 +154,7 @@ SELECT INDUSTRY_SECTOR, COUNT(*) FROM FILING_INDEX GROUP BY 1 ORDER BY 2 DESC;
 
 ---
 
-## Phase 4: Processing (~3 minutes for Quick Start)
+## Phase 4: Processing (~10 minutes for Quick Start)
 
 ### Worksheet 4: UDFs + Chunking + Signal Extraction
 
@@ -169,7 +169,7 @@ Wait for chunking to complete, then:
 
 5. `sql/03_processing/04_signal_extraction.sql` — Runs AI signal extraction (3 sessions sequentially)
 
-**Note:** Signal extraction uses AI_EXTRACT and takes ~2-3 minutes for 376 filings. These manual scripts are for Quick Start only. For production or larger corpora, use the Processing Task DAG (Phase 6b) which handles chunking, signals, metrics, guidance, normalization, and search refresh automatically.
+**Note:** Signal extraction uses AI_EXTRACT and takes ~5 minutes for 376 filings. Metrics and guidance extraction (AI_COMPLETE) add another ~6 minutes. These manual scripts are for Quick Start only. For production or larger corpora, use the Processing Task DAG (Phase 6b) which handles chunking, signals, metrics, guidance, normalization, and search refresh automatically.
 
 After signals are extracted, propagate industry data to downstream tables:
 
@@ -240,7 +240,7 @@ SELECT SNOWFLAKE.CORTEX.AGENT(
 
 ---
 
-## Done! Quick Start Complete
+## Done! Quick Start Complete (~20-25 minutes total, or ~10-12 with limit=100)
 
 You now have a working SEC Filing Intelligence agent with:
 - 376 filings from Feb 21, 2025
