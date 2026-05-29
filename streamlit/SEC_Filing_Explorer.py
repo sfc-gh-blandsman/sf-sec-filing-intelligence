@@ -1194,7 +1194,7 @@ def render_pipeline_control():
 def render_data_quality():
     st.header("Data Quality")
 
-    # Health Score Badge
+    # Health Score Badge with transparent breakdown
     @st.cache_data(ttl=300)
     def compute_health_score():
         row = session.sql("""
@@ -1208,17 +1208,18 @@ def render_data_quality():
         """).collect()[0]
         idx = max(int(row["IDX"]), 1)
         content = max(int(row["CONTENT"]), 1)
-        scores = [
-            int(row["CONTENT"]) / idx,           # content coverage
-            int(row["CHUNKED"]) / content,        # chunking coverage
-            int(row["EXTRACTED"]) / content,      # signal coverage
-            int(row["HAS_TICKER"]) / idx,         # ticker enrichment
-            int(row["HAS_SECTOR"]) / idx,         # sector enrichment
+        components = [
+            ("Content Coverage", int(row["CONTENT"]), idx),
+            ("Chunking", int(row["CHUNKED"]), content),
+            ("Signal Extraction", int(row["EXTRACTED"]), content),
+            ("Ticker Enrichment", int(row["HAS_TICKER"]), idx),
+            ("Industry Sector", int(row["HAS_SECTOR"]), idx),
         ]
-        return round(sum(scores) / len(scores) * 100, 0)
+        avg = sum(n / d for _, n, d in components) / len(components) * 100
+        return round(avg, 0), components
 
     try:
-        health = compute_health_score()
+        health, components = compute_health_score()
         if health >= 90:
             color = "#2ECC40"
         elif health >= 70:
@@ -1231,6 +1232,13 @@ def render_data_quality():
             f'Health Score: {health:.0f}/100</div>',
             unsafe_allow_html=True
         )
+        with st.expander("Score Breakdown"):
+            for name, numerator, denominator in components:
+                pct = numerator / denominator if denominator > 0 else 0
+                col_name, col_bar, col_val = st.columns([3, 5, 3])
+                col_name.markdown(f"**{name}**")
+                col_bar.progress(pct)
+                col_val.caption(f"{pct*100:.0f}% ({numerator:,} / {denominator:,})")
     except Exception:
         pass
 
