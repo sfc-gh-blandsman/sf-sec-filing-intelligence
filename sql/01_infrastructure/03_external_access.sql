@@ -5,6 +5,10 @@
 --   1. SEC EDGAR API (filing ingestion + ticker enrichment)
 --   2. PyPI (Streamlit container runtime package installation)
 -- Run 00_config.sql first to set session variables.
+--
+-- IMPORTANT: Statements in this file MUST be executed in strict top-to-bottom order.
+-- Network rules must exist BEFORE their referencing External Access Integration.
+-- Do NOT parallelize or reorder these statements.
 -- =============================================================================
 
 USE ROLE ACCOUNTADMIN;

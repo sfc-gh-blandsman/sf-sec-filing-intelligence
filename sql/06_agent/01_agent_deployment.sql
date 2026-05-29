@@ -155,3 +155,22 @@ SHOW AGENTS LIKE '%' IN SCHEMA;
 -- =============================================================================
 -- Re-run this entire script to redeploy with updated YAML.
 -- The dynamic SQL automatically picks up current $config_* values.
+
+
+-- =============================================================================
+-- ALTERNATIVE: Direct deployment (for SQL clients that can't handle nested $$)
+-- =============================================================================
+-- If the EXECUTE IMMEDIATE above fails with delimiter/syntax errors in your SQL
+-- client (Python connector, Cortex Code sql_execute, REST API, etc.), run a
+-- direct CREATE AGENT with literal FQN values instead:
+--
+--   CREATE OR REPLACE AGENT SEC_FILING_AGENT
+--     COMMENT = 'SEC EDGAR filing research agent'
+--     FROM SPECIFICATION $$
+--     ... (YAML spec with literal values for search_service, semantic_view, warehouse) ...
+--     $$;
+--
+-- This is functionally equivalent — the EXECUTE IMMEDIATE wrapper is only needed
+-- to inject $config_* session variables into the YAML (which can't reference them natively).
+-- Copy the YAML from agent/spec/sec_filing_agent.yaml and replace placeholders with
+-- your actual values (database, schema, search service name, semantic view name, warehouse).

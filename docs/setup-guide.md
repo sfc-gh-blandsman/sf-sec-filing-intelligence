@@ -25,6 +25,14 @@ Every worksheet must start by pasting and running `sql/00_config.sql`. Session v
 4. Paste the next script below
 5. Run the script
 
+### Programmatic Execution (Python, CI/CD, AI agents like Cortex Code)
+
+If executing scripts programmatically (not in Snowsight worksheets):
+- Session variables (`$config_*`) and `USE DATABASE/SCHEMA` do NOT persist across separate SQL calls
+- Either execute each phase file as a single multi-statement script, or prefix every statement with the USE context
+- Alternatively, use fully-qualified object names (e.g., `SEC_FILINGS.FILING_DATA.FILING_INDEX`)
+- File uploads to stages require `snow stage copy` (SnowCLI) or the Snowsight UI — there is no pure-SQL equivalent for uploading local files to a stage
+
 ---
 
 ## Phase 1: Infrastructure (2 minutes)
@@ -69,14 +77,17 @@ Paste and run:
 
 Then upload the app files using ONE of these methods:
 
-**Option A: PUT command** (from SnowSQL or any SQL client — replace `<PROJECT_DIR>` with your local path):
+**Option A: SnowCLI** (recommended — works for automation and AI-assisted installs):
 
-```sql
-PUT file://<PROJECT_DIR>/streamlit/SEC_Filing_Explorer.py @STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT file://<PROJECT_DIR>/streamlit/environment.yml @STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+```bash
+snow stage copy streamlit/SEC_Filing_Explorer.py @SEC_FILINGS.FILING_DATA.STREAMLIT_STAGE/ --overwrite
+snow stage copy streamlit/pyproject.toml @SEC_FILINGS.FILING_DATA.STREAMLIT_STAGE/ --overwrite
+snow stage copy streamlit/environment.yml @SEC_FILINGS.FILING_DATA.STREAMLIT_STAGE/ --overwrite
 ```
 
-**Option B: Snowsight UI** — Navigate to Data → SEC_FILINGS → FILING_DATA → Stages → STREAMLIT_STAGE → click "+ Files" and upload both files from the `streamlit/` directory.
+**Option B: Snowsight UI** — Navigate to Data → SEC_FILINGS → FILING_DATA → Stages → STREAMLIT_STAGE → click "+ Files" and upload all files from the `streamlit/` directory.
+
+**Important for AI-assisted / programmatic installs:** There is no pure-SQL mechanism to upload local files to a stage. SnowCLI (`snow stage copy`) is required. The main Streamlit app file (~116KB) is too large to reliably pass as a SQL string literal.
 
 **Verify:**
 
@@ -150,6 +161,13 @@ Then run the metadata backfill:
 ```sql
 SELECT INDUSTRY_SECTOR, COUNT(*) FROM FILING_INDEX GROUP BY 1 ORDER BY 2 DESC;
 -- Should show 8 sectors: Finance, Technology, Life Sciences, Manufacturing, etc.
+```
+
+**Note on PERIOD_OF_REPORT:** The feed archive loader (`LOAD_FEED_ARCHIVE`) stores the primary document content in `CONTENT_TEXT`, not the full SEC submission wrapper. The `CONFORMED PERIOD OF REPORT` metadata lives in the submission header which is parsed during download but may not persist to `CONTENT_TEXT` for all filings. If `PERIOD_OF_REPORT` is NULL after backfill, this is expected for feed-loaded data. It does not affect agent functionality — `SIGNAL_DATE` (the SEC filing receipt date) is the primary time dimension used by both Cortex Search and the semantic view.
+
+```sql
+SELECT COUNT(*) AS total, COUNT(PERIOD_OF_REPORT) AS has_period FROM FILING_INDEX;
+-- Quick Start: may show 0 has_period — this is normal for feed-loaded data
 ```
 
 ---
