@@ -878,12 +878,14 @@ BEGIN
         '  Reference: sql/06_agent/02_eval_framework.sql' || CHR(10) || CHR(10) ||
         'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR;
 
-    CALL SYSTEM$SEND_EMAIL(
-        _CFG('email_integration'),
-        _CFG('email_recipient'),
-        'SEC Filing Pipeline: ' || :status || ' — Run Eval Next',
-        :msg
-    );
+    IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+        CALL SYSTEM$SEND_EMAIL(
+            _CFG('email_integration'),
+            _CFG('email_recipient'),
+            'SEC Filing Pipeline: ' || :status || ' — Run Eval Next',
+            :msg
+        );
+    END IF;
 END;
 
 

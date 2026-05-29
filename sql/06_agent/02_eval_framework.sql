@@ -361,12 +361,14 @@ BEGIN
         'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR || CHR(10) || CHR(10) ||
         'Query results: SELECT INPUT, METRIC_NAME, EVAL_AGG_SCORE, EXPLANATION FROM EVAL_RESULTS ORDER BY CAPTURED_AT DESC';
 
-    CALL SYSTEM$SEND_EMAIL(
-        _CFG('email_integration'),
-        _CFG('email_recipient'),
-        'SEC Filing Agent Eval: COMPLETE (avg=' || :avg_score::VARCHAR || ')',
-        :msg
-    );
+    IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+        CALL SYSTEM$SEND_EMAIL(
+            _CFG('email_integration'),
+            _CFG('email_recipient'),
+            'SEC Filing Agent Eval: COMPLETE (avg=' || :avg_score::VARCHAR || ')',
+            :msg
+        );
+    END IF;
 END;
 
 -- Resume all child tasks

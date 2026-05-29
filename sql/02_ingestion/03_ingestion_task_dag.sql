@@ -155,12 +155,14 @@ BEGIN
     SELECT COUNT(*) INTO :index_count FROM FILING_INDEX;
     SELECT COUNT(*) INTO :content_count FROM FILING_CONTENT;
 
-    CALL SYSTEM$SEND_EMAIL(_CFG('email_integration'), _CFG('email_recipient'),
-        'SEC Filing Ingestion Complete',
-        'INGESTION DAG COMPLETE\n================================\n' ||
-        'FILING_INDEX rows: ' || :index_count::VARCHAR || '\n' ||
-        'FILING_CONTENT rows: ' || :content_count::VARCHAR || '\n' ||
-        'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR);
+    IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+        CALL SYSTEM$SEND_EMAIL(_CFG('email_integration'), _CFG('email_recipient'),
+            'SEC Filing Ingestion Complete',
+            'INGESTION DAG COMPLETE\n================================\n' ||
+            'FILING_INDEX rows: ' || :index_count::VARCHAR || '\n' ||
+            'FILING_CONTENT rows: ' || :content_count::VARCHAR || '\n' ||
+            'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR);
+    END IF;
 END;
 
 -- =============================================================================

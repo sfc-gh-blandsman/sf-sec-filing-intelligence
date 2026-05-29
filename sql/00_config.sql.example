@@ -10,6 +10,7 @@ SET config_warehouse_build = 'FILING_BUILD_WH';
 SET config_warehouse_ingest = 'FILING_INGEST_WH';
 SET config_email_integration = 'MY_EMAIL_INT';
 SET config_email_recipient = 'you@company.com';
+SET config_enable_dag_emails = 'FALSE';  -- Set to 'TRUE' to receive DAG completion/failure emails
 SET config_eai_name = 'SEC_EDGAR_EAI';
 SET config_network_rule = 'EDGAR_NETWORK_RULE';
 SET config_user_agent = 'YourCompany SEC-Filing-Project your-email@company.com';
@@ -52,6 +53,7 @@ BEGIN
     ('warehouse_ingest', $config_warehouse_ingest),
     ('email_integration', $config_email_integration),
     ('email_recipient', $config_email_recipient),
+    ('enable_dag_emails', $config_enable_dag_emails),
     ('user_agent', $config_user_agent),
     ('search_service', $config_search_service),
     ('semantic_view', $config_semantic_view),

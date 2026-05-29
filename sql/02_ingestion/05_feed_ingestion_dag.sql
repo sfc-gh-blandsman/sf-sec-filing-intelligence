@@ -342,9 +342,11 @@ BEGIN
 
     -- Safety cap: defense against unforeseen infinite loop bugs
     IF (:current_year > :end_year + 1) THEN
-        CALL SYSTEM$SEND_EMAIL(_CFG('email_integration'), _CFG('email_recipient'),
-            'SEC Filing Feed: SAFETY STOP',
-            'current_year=' || :current_year::VARCHAR || ' exceeds end_year=' || :end_year::VARCHAR || '. Manual intervention required.');
+        IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+            CALL SYSTEM$SEND_EMAIL(_CFG('email_integration'), _CFG('email_recipient'),
+                'SEC Filing Feed: SAFETY STOP',
+                'current_year=' || :current_year::VARCHAR || ' exceeds end_year=' || :end_year::VARCHAR || '. Manual intervention required.');
+        END IF;
         RETURN 'SAFETY STOP';
     END IF;
 
@@ -419,15 +421,17 @@ BEGIN
         'Next: ' || :next_action || CHR(10) ||
         'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR;
 
-    CALL SYSTEM$SEND_EMAIL(
-        _CFG('email_integration'),
-        _CFG('email_recipient'),
-        'SEC Filing Feed: Year ' || :current_year::VARCHAR || ' — ' ||
-            IFF(:orphan_count > 0 AND :retry_count >= 2, 'STOPPED',
-            IFF(:orphan_count > 0, 'RETRYING',
-            IFF(:current_year < :end_year, 'ADVANCING', 'COMPLETE'))),
-        :msg
-    );
+    IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+        CALL SYSTEM$SEND_EMAIL(
+            _CFG('email_integration'),
+            _CFG('email_recipient'),
+            'SEC Filing Feed: Year ' || :current_year::VARCHAR || ' — ' ||
+                IFF(:orphan_count > 0 AND :retry_count >= 2, 'STOPPED',
+                IFF(:orphan_count > 0, 'RETRYING',
+                IFF(:current_year < :end_year, 'ADVANCING', 'COMPLETE'))),
+            :msg
+        );
+    END IF;
 END;
 
 

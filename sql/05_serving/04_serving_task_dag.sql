@@ -233,12 +233,14 @@ BEGIN
         '  3. Materialize: EXECUTE TASK EVAL_DAG_ROOT;' || CHR(10) ||
         'Timestamp: ' || CURRENT_TIMESTAMP()::VARCHAR;
 
-    CALL SYSTEM$SEND_EMAIL(
-        _CFG('email_integration'),
-        _CFG('email_recipient'),
-        'SEC Filing Serving: ' || IFF(:failed > 0, 'PARTIAL (' || :failed::VARCHAR || ' failed)', 'COMPLETE') || ' — Run Eval Next',
-        :msg
-    );
+    IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+        CALL SYSTEM$SEND_EMAIL(
+            _CFG('email_integration'),
+            _CFG('email_recipient'),
+            'SEC Filing Serving: ' || IFF(:failed > 0, 'PARTIAL (' || :failed::VARCHAR || ' failed)', 'COMPLETE') || ' — Run Eval Next',
+            :msg
+        );
+    END IF;
 END;
 
 

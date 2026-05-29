@@ -164,20 +164,24 @@ BEGIN
 
     -- Only chain to processing if enrichment produced results
     IF (:with_sector > 0 AND :with_period > 0) THEN
-        CALL SYSTEM$SEND_EMAIL(
-            _CFG('email_integration'),
-            _CFG('email_recipient'),
-            'SEC Filing Enrichment: COMPLETE -> Processing',
-            :msg
-        );
+        IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+            CALL SYSTEM$SEND_EMAIL(
+                _CFG('email_integration'),
+                _CFG('email_recipient'),
+                'SEC Filing Enrichment: COMPLETE -> Processing',
+                :msg
+            );
+        END IF;
         EXECUTE TASK T_PROCESSING_ROOT;
     ELSE
-        CALL SYSTEM$SEND_EMAIL(
-            _CFG('email_integration'),
-            _CFG('email_recipient'),
-            'SEC Filing Enrichment: FAILED (no sector/period data)',
-            :msg
-        );
+        IF (_CFG('enable_dag_emails') = 'TRUE') THEN
+            CALL SYSTEM$SEND_EMAIL(
+                _CFG('email_integration'),
+                _CFG('email_recipient'),
+                'SEC Filing Enrichment: FAILED (no sector/period data)',
+                :msg
+            );
+        END IF;
     END IF;
 END;
 

@@ -353,9 +353,11 @@ BEGIN
         ' prep_result := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));' ||
         ' CALL PROCESS_FILINGS(ARRAY_CONSTRUCT(' || :acc_str || '));' ||
         ' proc_result := (SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())));' ||
-        ' CALL SYSTEM$SEND_EMAIL(''' || :email_int || ''', ''' || :email_to || ''',' ||
-        ' ''SEC Filing Processing Complete (' || ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ' filings)'',' ||
-        ' :prep_result || CHR(10) || :proc_result);' ||
+        ' IF ((SELECT VALUE FROM _PIPELINE_CONFIG WHERE KEY = ''enable_dag_emails'') = ''TRUE'') THEN' ||
+        '   CALL SYSTEM$SEND_EMAIL(''' || :email_int || ''', ''' || :email_to || ''',' ||
+        '   ''SEC Filing Processing Complete (' || ARRAY_SIZE(:P_ACCESSIONS)::VARCHAR || ' filings)'',' ||
+        '   :prep_result || CHR(10) || :proc_result);' ||
+        ' END IF;' ||
         ' END';
 
     task_ddl := 'CREATE OR REPLACE TASK ' || :task_name ||
