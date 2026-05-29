@@ -713,23 +713,39 @@ def render_cost_monitor():
 
     st.divider()
 
-    # Cortex AI usage
+    # Cortex AI usage (project-scoped)
     st.subheader("Cortex AI Usage")
+    st.caption("Scoped to this project's warehouses only — not full account usage.")
+
+    ai_days = st.selectbox("Time period", [7, 30, 90], index=1, format_func=lambda d: f"Last {d} days", key="ai_usage_days")
+
     @st.cache_data(ttl=300)
-    def get_ai_usage():
+    def get_ai_usage(days, wh_names):
         try:
-            return session.sql("""
+            wh_list = ",".join(f"'{w}'" for w in wh_names if w)
+            return session.sql(f"""
                 SELECT FUNCTION_NAME, MODEL_NAME,
                        ROUND(SUM(CREDITS), 4) AS total_credits,
                        COUNT(*) AS query_hours
                 FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AI_FUNCTIONS_USAGE_HISTORY
+                WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+                  AND WAREHOUSE_ID IN (
+                      SELECT DISTINCT WAREHOUSE_ID
+                      FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+                      WHERE WAREHOUSE_NAME IN ({wh_list})
+                  )
                 GROUP BY 1, 2
                 ORDER BY 3 DESC
             """).to_pandas()
         except Exception:
             return None
 
-    df_ai = get_ai_usage()
+    project_warehouses = [
+        CONFIG.get("warehouse", "FILING_WH"),
+        CONFIG.get("warehouse_build", "FILING_BUILD_WH"),
+        CONFIG.get("warehouse_ingest", "FILING_INGEST_WH"),
+    ]
+    df_ai = get_ai_usage(ai_days, project_warehouses)
     if df_ai is not None and not df_ai.empty:
         fig = px.bar(df_ai, x="MODEL_NAME", y="TOTAL_CREDITS", color="FUNCTION_NAME",
                     text_auto=".2f",
@@ -738,7 +754,7 @@ def render_cost_monitor():
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(df_ai, use_container_width=True)
     else:
-        st.info("No Cortex AI usage data available (or insufficient permissions).")
+        st.info("No Cortex AI usage data available for this project's warehouses (or insufficient permissions).")
 
     st.divider()
 
