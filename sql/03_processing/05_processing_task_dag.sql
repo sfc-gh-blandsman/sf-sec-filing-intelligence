@@ -388,7 +388,13 @@ BEGIN
         -- Step 1a: Materialize keyword-targeted excerpts (no AI call)
         -- Split from AI_COMPLETE to avoid Snowflake internal error 300010:391167117
         -- which occurs when AI_COMPLETE is nested inside a complex LISTAGG subquery CTAS.
+        -- 
+        -- 8-K optimization: "Financial Statements and Exhibits" in 8-Ks is just Item 9.01
+        -- (exhibit listing + signatures), not actual financials. Only process 8-Ks that
+        -- have chunks in Results of Operations or Regulation FD Disclosure with financial
+        -- keywords present. This reduces 8-K workload by ~98% (276K → 4K eligible).
         CREATE OR REPLACE TEMPORARY TABLE _METRICS_EXCERPTS AS
+        -- Leg 1: 10-K and 10-Q — full section coverage (high hit rate: 61-75%)
         SELECT fi.ACCESSION_NO,
             LEFT(LISTAGG(
                 CASE WHEN LOWER(ck.CHUNK_TEXT) LIKE '%revenue%'
@@ -405,10 +411,40 @@ BEGIN
         JOIN FILING_CHUNKS ck ON ck.ACCESSION_NO = fi.ACCESSION_NO
         JOIN FILING_SIGNALS fs ON fs.ACCESSION_NO = fi.ACCESSION_NO
         WHERE ck.SECTION_NAME IN ('Financial Statements', 'MD&A', 'Results of Operations', 'Financial Statements and Exhibits')
-          AND fi.FORM_TYPE IN ('10-K', '10-Q', '8-K')
+          AND fi.FORM_TYPE IN ('10-K', '10-Q')
           AND fs.METRICS_EXTRACTED_AT IS NULL
         GROUP BY fi.ACCESSION_NO
         HAVING excerpt IS NOT NULL AND LENGTH(excerpt) > 200
+
+        UNION ALL
+
+        -- Leg 2: 8-K — only earnings-related filings (Results of Operations / Reg FD with keywords)
+        SELECT fi.ACCESSION_NO,
+            LEFT(LISTAGG(
+                CASE WHEN LOWER(ck.CHUNK_TEXT) LIKE '%revenue%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%net income%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%net loss%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%earnings per share%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%diluted%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%total net sales%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%in thousands%'
+                     OR LOWER(ck.CHUNK_TEXT) LIKE '%in millions%'
+                THEN ck.CHUNK_TEXT END, ' '
+            ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 16000) AS excerpt
+        FROM FILING_INDEX fi
+        JOIN FILING_CHUNKS ck ON ck.ACCESSION_NO = fi.ACCESSION_NO
+        JOIN FILING_SIGNALS fs ON fs.ACCESSION_NO = fi.ACCESSION_NO
+        WHERE ck.SECTION_NAME IN ('Results of Operations', 'Regulation FD Disclosure')
+          AND fi.FORM_TYPE = '8-K'
+          AND fs.METRICS_EXTRACTED_AT IS NULL
+          AND (LOWER(ck.CHUNK_TEXT) LIKE '%revenue%'
+               OR LOWER(ck.CHUNK_TEXT) LIKE '%net income%'
+               OR LOWER(ck.CHUNK_TEXT) LIKE '%earnings per share%'
+               OR LOWER(ck.CHUNK_TEXT) LIKE '%total net sales%'
+               OR LOWER(ck.CHUNK_TEXT) LIKE '%diluted%')
+        GROUP BY fi.ACCESSION_NO
+        HAVING excerpt IS NOT NULL AND LENGTH(excerpt) > 200
+
         LIMIT :BATCH_SIZE;
 
         -- Check if any rows produced (break before expensive AI call)
