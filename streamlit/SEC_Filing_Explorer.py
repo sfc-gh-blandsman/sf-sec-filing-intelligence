@@ -2041,6 +2041,8 @@ def render_research_explorer():
                     summary = cortex_complete(research_model, prompt)
                 st.markdown(f"### {data['company']} ({ticker})")
                 st.markdown(summary)
+                with st.expander("LLM Prompt"):
+                    st.code(prompt, language=None)
                 with st.expander(f"Source Chunks ({len(data['sources'])} retrieved)"):
                     for i, s in enumerate(data["sources"][:5]):
                         link_md = f" — [EDGAR]({s['link']})" if s["link"] else ""
@@ -2090,6 +2092,9 @@ def render_research_explorer():
                 with st.spinner("Generating comparison..."):
                     comparison = cortex_complete(research_model, prompt)
                 st.markdown(comparison)
+
+                with st.expander("LLM Prompt"):
+                    st.code(prompt, language=None)
 
                 # Source citations for comparison
                 with st.expander("Source Chunks Used in Comparison"):
