@@ -1073,6 +1073,94 @@ def render_pipeline_control():
                 except Exception:
                     st.error("Feed DAG not deployed. Run `sql/02_ingestion/05_feed_ingestion_dag.sql` first.")
 
+    # -------------------------------------------------------------------------
+    # Section 4: Pipeline Hygiene
+    # -------------------------------------------------------------------------
+    st.divider()
+    st.subheader("Pipeline Hygiene")
+    st.caption("Identify and process individual filings that are missing from Cortex Search or Analyst.")
+
+    # Summary metrics
+    @st.cache_data(ttl=60)
+    def get_hygiene_metrics():
+        return session.sql("""
+            SELECT
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE PARSE_STATUS = 'PENDING') AS pending_chunk,
+                (SELECT COUNT(*) FROM FILING_CONTENT WHERE SIGNAL_STATUS = 'PENDING') AS pending_signal,
+                (SELECT COUNT(*) FROM FILING_INDEX fi WHERE NOT EXISTS (
+                    SELECT 1 FROM FILING_CONTENT fc WHERE fc.ACCESSION_NO = fi.ACCESSION_NO
+                )) AS no_content
+        """).collect()[0]
+
+    try:
+        hm = get_hygiene_metrics()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Pending Chunking", f"{int(hm['PENDING_CHUNK']):,}")
+        col2.metric("Pending Signals", f"{int(hm['PENDING_SIGNAL']):,}")
+        col3.metric("No Content", f"{int(hm['NO_CONTENT']):,}")
+    except Exception:
+        pass
+
+    # Filings missing processing
+    st.markdown("**Filings Awaiting Processing**")
+
+    @st.cache_data(ttl=60)
+    def get_pending_filings():
+        return session.sql("""
+            SELECT fi.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
+                   LEFT(fi.FILED_AT::VARCHAR, 10) AS FILED_DATE,
+                   fc.PARSE_STATUS, fc.SIGNAL_STATUS
+            FROM FILING_CONTENT fc
+            JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
+            WHERE fc.PARSE_STATUS = 'PENDING' OR fc.SIGNAL_STATUS = 'PENDING'
+            ORDER BY fi.FILED_AT DESC
+            LIMIT 50
+        """).to_pandas()
+
+    df_pending = get_pending_filings()
+    if not df_pending.empty:
+        st.dataframe(df_pending, use_container_width=True, hide_index=True, height=250)
+
+        # Process a single filing
+        filing_options = df_pending["ACCESSION_NO"].tolist()
+        selected_filing = st.selectbox("Select filing to process:", filing_options, key="hygiene_select",
+                                       format_func=lambda a: f"{a} — {df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['COMPANY_NAME']} ({df_pending[df_pending['ACCESSION_NO']==a].iloc[0]['FORM_TYPE']})")
+        if st.button("Process Filing Now", type="primary", key="hygiene_process"):
+            try:
+                result = session.sql(f"CALL TRIGGER_PROCESS_FILING('{selected_filing}')").collect()
+                if result:
+                    st.success(result[0][0])
+            except Exception as e:
+                st.error(f"Failed: {str(e)[:200]}")
+    else:
+        st.success("All filings are fully processed.")
+
+    # Recent processing tasks
+    st.markdown("**Recent Spot-Processing Tasks**")
+
+    @st.cache_data(ttl=30)
+    def get_recent_process_tasks():
+        return session.sql("""
+            SELECT NAME, STATE,
+                   QUERY_START_TIME::VARCHAR AS STARTED,
+                   DATEDIFF('second', QUERY_START_TIME, COALESCE(COMPLETED_TIME, CURRENT_TIMESTAMP())) AS ELAPSED_SEC
+            FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                SCHEDULED_TIME_RANGE_START => DATEADD('day', -1, CURRENT_TIMESTAMP()),
+                RESULT_LIMIT => 10
+            ))
+            WHERE NAME LIKE 'PROCESS_FILING_%'
+            ORDER BY SCHEDULED_TIME DESC
+        """).to_pandas()
+
+    try:
+        df_tasks = get_recent_process_tasks()
+        if not df_tasks.empty:
+            st.dataframe(df_tasks, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No recent spot-processing tasks.")
+    except Exception:
+        st.caption("Unable to query task history.")
+
 
 # =============================================================================
 # Tab 6: Data Quality
