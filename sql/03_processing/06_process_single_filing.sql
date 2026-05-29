@@ -255,20 +255,49 @@ BEGIN
         SELECT COUNT(*) FROM FILING_CHUNKS WHERE ACCESSION_NO IN (' || :v_acc_list || ')
     ' INTO :v_chunk_count;
 
-    -- Signal extraction for all pending filings in the list
+    -- Signal extraction with section-targeted excerpts for 10-K/10-Q
     EXECUTE IMMEDIATE '
         INSERT INTO FILING_SIGNALS
             (SIGNAL_ID, ACCESSION_NO, COMPANY_NAME, TICKER, FORM_TYPE,
              SIGNAL_DATE, PERIOD_OF_REPORT, EVENT_TYPE, SENTIMENT, SUMMARY,
              KEY_METRICS, RISK_FLAGS, MATERIAL_ITEMS, INDUSTRY_SECTOR, INDUSTRY_TITLE,
              EXTRACTION_MODEL, IS_AMENDMENT)
-        WITH source AS (
+        WITH chunk_excerpts AS (
+            SELECT ck.ACCESSION_NO,
+                COALESCE(LEFT(LISTAGG(
+                    CASE WHEN ck.SECTION_NAME = ''Risk Factors'' THEN ck.CHUNK_TEXT END, '' ''
+                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
+                COALESCE(LEFT(LISTAGG(
+                    CASE WHEN ck.SECTION_NAME = ''MD&A'' THEN ck.CHUNK_TEXT END, '' ''
+                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 5000), '''') ||
+                COALESCE(LEFT(LISTAGG(
+                    CASE WHEN ck.SECTION_NAME = ''Financial Statements'' AND ck.CHUNK_INDEX <= 3 THEN ck.CHUNK_TEXT END, '' ''
+                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
+                COALESCE(LEFT(LISTAGG(
+                    CASE WHEN ck.SECTION_NAME = ''Business'' THEN ck.CHUNK_TEXT END, '' ''
+                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 3000), '''') ||
+                COALESCE(LEFT(LISTAGG(
+                    CASE WHEN ck.SECTION_NAME = ''Market Risk'' THEN ck.CHUNK_TEXT END, '' ''
+                ) WITHIN GROUP (ORDER BY ck.CHUNK_INDEX), 2000), '''')
+                AS targeted_excerpt
+            FROM FILING_CHUNKS ck
+            WHERE ck.ACCESSION_NO IN (' || :v_acc_list || ')
+            GROUP BY ck.ACCESSION_NO
+        ),
+        source AS (
             SELECT fc.ACCESSION_NO, fi.COMPANY_NAME, fi.TICKER, fi.FORM_TYPE,
                    fi.FILED_AT, fi.PERIOD_OF_REPORT, fi.IS_AMENDMENT,
                    fi.INDUSTRY_SECTOR, fi.INDUSTRY_TITLE,
-                   LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000) AS excerpt
+                   CASE
+                       WHEN fi.FORM_TYPE IN (''10-K'',''10-Q'',''10-K/A'',''10-Q/A'',''10-KT'')
+                            AND ce.targeted_excerpt IS NOT NULL
+                            AND LENGTH(ce.targeted_excerpt) > 500
+                       THEN LEFT(ce.targeted_excerpt, 16000)
+                       ELSE LEFT(CLEAN_TEXT(fc.CONTENT_TEXT), 16000)
+                   END AS excerpt
             FROM FILING_CONTENT fc
             JOIN FILING_INDEX fi ON fi.ACCESSION_NO = fc.ACCESSION_NO
+            LEFT JOIN chunk_excerpts ce ON ce.ACCESSION_NO = fc.ACCESSION_NO
             WHERE fc.ACCESSION_NO IN (' || :v_acc_list || ')
               AND fc.SIGNAL_STATUS = ''PENDING''
               AND fc.CONTENT_TEXT IS NOT NULL
