@@ -77,7 +77,7 @@ BEGIN
             text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
-                'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
+                'sentiment': 'string - strictly one of: POSITIVE, NEGATIVE, NEUTRAL',
                 'summary': 'string - 2-3 sentence summary of the most material information',
                 'key_metrics': 'object - any financial figures mentioned: revenue, net_income, eps, guidance, yoy_change',
                 'risk_flags': 'array of strings - specific risk categories mentioned',
@@ -131,7 +131,7 @@ BEGIN
             text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
-                'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
+                'sentiment': 'string - strictly one of: POSITIVE, NEGATIVE, NEUTRAL',
                 'summary': 'string - 2-3 sentence summary of the most material information',
                 'key_metrics': 'object - any financial figures mentioned: revenue, net_income, eps, guidance, yoy_change',
                 'risk_flags': 'array of strings - specific risk categories mentioned',
@@ -185,7 +185,7 @@ BEGIN
             text => s.EXCERPT,
             responseFormat => {
                 'event_type': 'string - one of: Earnings, M&A, Leadership Change, Risk Disclosure, Guidance Update, Regulatory, Capital Markets, Bankruptcy, Other',
-                'sentiment': 'string - one of: POSITIVE, NEGATIVE, NEUTRAL, MIXED',
+                'sentiment': 'string - strictly one of: POSITIVE, NEGATIVE, NEUTRAL',
                 'summary': 'string - 2-3 sentence summary of the most material information',
                 'key_metrics': 'object - any financial figures mentioned: revenue, net_income, eps, guidance, yoy_change',
                 'risk_flags': 'array of strings - specific risk categories mentioned',
