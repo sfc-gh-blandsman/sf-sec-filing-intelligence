@@ -1888,6 +1888,7 @@ def render_research_explorer():
             return
 
         all_results = []
+        search_queries = []
         progress = st.progress(0)
 
         for i, ticker in enumerate(tickers):
@@ -1908,6 +1909,7 @@ def render_research_explorer():
                     filters = {"@and": filter_parts} if len(filter_parts) > 1 else filter_parts[0]
 
                     query = search_query if search_query else (section or "SEC filing disclosure")
+                    search_queries.append({"query": query, "filter": filters, "limit": 5})
                     try:
                         results = search_filings(query, filters=filters, limit=5)
                         for r in results:
@@ -1955,6 +1957,7 @@ def render_research_explorer():
         # Store in session state for display
         st.session_state["re_results"] = all_results
         st.session_state["re_output_mode"] = output_mode
+        st.session_state["re_search_queries"] = search_queries
 
     # -------------------------------------------------------------------------
     # Display results
@@ -1981,6 +1984,14 @@ def render_research_explorer():
         )
         st.markdown(pills_html, unsafe_allow_html=True)
         st.write("")  # spacer
+
+        # Show Cortex Search queries used
+        search_queries_display = st.session_state.get("re_search_queries", [])
+        if search_queries_display:
+            with st.expander(f"Cortex Search Queries ({len(search_queries_display)} calls)"):
+                for i, sq in enumerate(search_queries_display):
+                    st.code(json.dumps(sq, indent=2), language="json")
+
         if mode == "Excerpts":
             # Group by company
             df_results = pd.DataFrame(results)
